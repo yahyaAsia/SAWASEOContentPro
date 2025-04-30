@@ -1,3 +1,9 @@
-streamlit
-textstat
-nltk
+streamlit==1.31.0
+requests==2.31.0
+beautifulsoup4==4.12.3
+validators==0.22.0
+google-api-python-client==2.115.0
+reportlab==4.0.9
+aiohttp==3.9.3
+textstat==0.7.3
+nltk==3.8.1
