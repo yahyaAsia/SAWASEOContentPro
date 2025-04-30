@@ -78,13 +78,68 @@ def load_css():
         </style>
     """, unsafe_allow_html=True)
 
-def parse_html_content(html_content: str) -> Tuple[str, str, List[str], str]:
-    """Parse HTML content to extract title, H1, headers (H2/H3), and main content."""
+def parse_html_content(html_content: str, main_keyword: str) -> Tuple[str, str, List[str], str]:
+    """Parse HTML or plain text content to extract title, H1, headers (H2/H3), and main content."""
+    # Detect if input is plain text (no HTML tags)
+    is_plain_text = not re.search(r'<[a-zA-Z]+>', html_content)
+    
+    if is_plain_text:
+        # Convert plain text to HTML
+        lines = html_content.strip().split('\n')
+        html_lines = []
+        headers = []
+        content_parts = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith('# '):
+                html_lines.append(f'<h1>{line[2:].strip()}</h1>')
+            elif line.startswith('## '):
+                html_lines.append(f'<h2>{line[3:].strip()}</h2>')
+                headers.append(line[3:].strip())
+            elif line.startswith('### '):
+                html_lines.append(f'<h3>{line[4:].strip()}</h3>')
+                headers.append(line[4:].strip())
+            else:
+                html_lines.append(f'<p>{line}</p>')
+                content_parts.append(line)
+        content = " ".join(content_parts)
+        html_content = f"""
+        <html>
+            <head>
+                <title>{main_keyword.capitalize()}</title>
+            </head>
+            <body>
+                {''.join(html_lines)}
+            </body>
+        </html>
+        """
+    else:
+        # Clean up Word/Google Docs artifacts
+        html_content = re.sub(r'<o:p>.*?</o:p>', '', html_content)  # Remove Word's <o:p>
+        html_content = re.sub(r'<span.*?>(.*?)</span>', r'\1', html_content)  # Remove Google Docs spans
+        html_content = re.sub(r'<font.*?>(.*?)</font>', r'\1', html_content)  # Remove font tags
+        html_content = re.sub(r'\s+', ' ', html_content)  # Normalize whitespace
+
+        # Ensure HTML structure
+        if not re.search(r'<html\b', html_content, re.IGNORECASE):
+            html_content = f"""
+            <html>
+                <head>
+                    <title>{main_keyword.capitalize()}</title>
+                </head>
+                <body>
+                    {html_content}
+                </body>
+            </html>
+            """
+
     soup = BeautifulSoup(html_content, 'html.parser')
 
     # Extract title
     title_tag = soup.find('title')
-    title = title_tag.get_text().strip() if title_tag else ""
+    title = title_tag.get_text().strip() if title_tag else main_keyword.capitalize()
 
     # Extract H1
     h1_tag = soup.find('h1')
@@ -109,7 +164,6 @@ def parse_html_content(html_content: str) -> Tuple[str, str, List[str], str]:
     
     # Join content parts and clean up
     content = " ".join(content_parts).strip()
-    # Remove extra whitespace
     content = re.sub(r'\s+', ' ', content)
 
     return title, h1, headers, content
@@ -122,7 +176,7 @@ def suggest_keywords(main_keyword: str, secondary_keywords: List[str], content: 
     # Generate suggestions based on main keyword and frequent content words
     main_words = set(main_keyword.lower().split())
     suggestions = []
-    for word, count in word_counts.most_common(50):  # Top 50 frequent words
+    for word, count in word_counts.most_common(50):
         if word not in main_keyword.lower() and word not in secondary_keywords and len(word) > 3:
             if any(w in word or word in w for w in main_words):
                 suggestions.append(word)
@@ -134,7 +188,7 @@ def suggest_keywords(main_keyword: str, secondary_keywords: List[str], content: 
             related_phrases.append(f"{kw} {word}")
             related_phrases.append(f"{word} {kw}")
     
-    return list(set(suggestions + related_phrases))[:5]  # Return top 5 unique suggestions
+    return list(set(suggestions + related_phrases))[:5]
 
 def analyze_tone(content: str) -> Tuple[float, str]:
     """Analyze tone consistency (academic/technical focus)."""
@@ -164,7 +218,7 @@ def analyze_tone(content: str) -> Tuple[float, str]:
 def check_plagiarism(content: str) -> Tuple[float, str]:
     """Basic plagiarism check using phrase repetition."""
     sentences = sent_tokenize(content)
-    phrase_length = 5  # Check 5-word phrases
+    phrase_length = 5
     phrases = []
     for sent in sentences:
         words = sent.split()
@@ -236,22 +290,22 @@ class ContentRater:
 
         # H1 tag (2025: single, descriptive, keyword-rich, concise, intent-aligned, natural)
         if self.h1:
-            scores['h1_tag'] += 10  # Single H1
+            scores['h1_tag'] += 10
             if len(self.h1.split()) > 3:
-                scores['h1_tag'] += 20  # Descriptive
+                scores['h1_tag'] += 20
             else:
                 self.feedback.append("H1 tag too short; make it descriptive (>3 words).")
             if self.main_keyword in self.h1.lower():
-                scores['h1_tag'] += 30  # Primary keyword
+                scores['h1_tag'] += 30
             else:
                 self.feedback.append("H1 tag missing main keyword.")
             intent_words = ['how', 'what', 'why', 'best', 'top', 'guide', 'buy', 'review']
             if any(word in self.h1.lower() for word in intent_words):
-                scores['h1_tag'] += 10  # Search intent
+                scores['h1_tag'] += 10
             else:
                 self.feedback.append("H1 tag may not align with search intent; include words like 'how', 'best', or 'guide'.")
             if len(self.h1) <= 60:
-                scores['h1_tag'] += 20  # Concise
+                scores['h1_tag'] += 20
             elif len(self.h1) <= 70:
                 scores['h1_tag'] += 10
                 self.feedback.append("H1 tag slightly long; aim for <60 chars.")
@@ -259,7 +313,7 @@ class ContentRater:
                 self.feedback.append("H1 tag too long (>70 chars); keep it concise.")
             keyword_count = self.h1.lower().count(self.main_keyword)
             if keyword_count <= 2:
-                scores['h1_tag'] += 10  # Natural
+                scores['h1_tag'] += 10
             else:
                 self.feedback.append("H1 tag may be keyword-stuffed; use keyword once or twice.")
             self.feedback.append("Ensure H1 is unique across pages and placed prominently as the main headline.")
@@ -577,9 +631,13 @@ def main():
     """Streamlit app for content rating."""
     load_css()
     st.title("Pre-Publishing Content Rating Tool")
-    st.markdown("Paste your HTML blog content below or upload an HTML file, and provide additional details to get an SEO and readability score.")
+    st.markdown("Paste your HTML, Word, or Google Docs content below or upload an HTML file, and provide additional details to get an SEO and readability score.")
     st.markdown("""
-        **Expected HTML Format:**
+        **Expected Formats:**
+        - **HTML**: Full HTML with `<title>`, `<h1>`, `<h2>`, `<p>`, etc.
+        - **Word/Google Docs**: Copy-pasted content with headings and paragraphs (will be converted to HTML).
+        - **Plain Text**: Use `#` for H1, `##` for H2, `###` for H3, and new lines for paragraphs.
+        **Example HTML:**
         ```html
         <html>
             <head>
@@ -588,15 +646,22 @@ def main():
             <body>
                 <h1>H1 Tag</h1>
                 <h2>H2 Header</h2>
-                <h3>H3 Header</h3>
                 <p>Main content paragraphs...</p>
             </body>
         </html>
         ```
+        **Example Plain Text:**
+        ```
+        # Running Shoe Innovations
+        ## Running Footwear Materials
+        Advanced running footwear utilizes carbon fiber...
+        ### Athletic Shoes Cushioning
+        Foam-based athletic shoes reduce impact...
+        ```
     """)
 
     with st.form("content_form"):
-        html_input = st.text_area("Paste HTML Content", placeholder="<html>\n<head>\n<title>Advanced Running Shoe Technology for 2025</title>\n</head>\n<body>\n<h1>Running Shoe Innovations Analyzed</h1>\n<h2>Running Footwear Materials</h2>\n<p>Advanced running footwear uses carbon fiber...</p>\n</body>\n</html>", height=300)
+        html_input = st.text_area("Paste Content (HTML, Word, Google Docs, or Plain Text)", placeholder="# Running Shoe Innovations\n## Running Footwear Materials\nAdvanced running footwear utilizes carbon fiber...\n### Athletic Shoes Cushioning\nFoam-based athletic shoes reduce impact...", height=300)
         uploaded_file = st.file_uploader("Or Upload HTML File", type=["html"])
         internal_links = st.text_area("Internal Links (one per line)", placeholder="/shoe-design\n/performance-tips")
         main_keyword = st.text_input("Main Keyword", placeholder="running shoe technology")
@@ -605,27 +670,27 @@ def main():
 
     if submit:
         if not html_input and not uploaded_file:
-            st.error("Please provide HTML content by pasting it or uploading a file.")
+            st.error("Please provide content by pasting it or uploading a file.")
         if not main_keyword:
             st.error("Please provide a Main Keyword.")
         else:
             try:
-                # Get HTML content from input or uploaded file
+                # Get content from input or uploaded file
                 if uploaded_file:
                     html_content = uploaded_file.read().decode("utf-8")
                 else:
                     html_content = html_input
 
-                # Parse the HTML content
-                title, h1, headers, content = parse_html_content(html_content)
+                # Parse the content
+                title, h1, headers, content = parse_html_content(html_content, main_keyword)
                 
                 # Process other inputs
                 internal_links_list = [link.strip() for link in internal_links.split("\n") if link.strip()] if internal_links else []
                 secondary_keywords_list = [kw.strip() for kw in secondary_keywords.split(",") if kw.strip()] if secondary_keywords else []
 
                 # Check if parsed components are present
-                if not all([title, h1, content]):
-                    st.error("Invalid HTML format. Ensure the content includes a <title>, <h1>, and main content (e.g., <p> tags).")
+                if not content:
+                    st.error("No main content detected; ensure the input includes paragraphs or text.")
                 else:
                     rater = ContentRater(
                         title=title,
@@ -640,7 +705,7 @@ def main():
                     st.markdown(f"<div class='report-box'><p class='score'>Final Score: {rater.score:.2f}/100</p>{report}</div>", unsafe_allow_html=True)
             except Exception as e:
                 st.error(f"Error processing content: {str(e)}")
-                st.markdown("Please ensure all inputs are valid and follow the expected HTML format, then try again.")
+                st.markdown("Please ensure the input is valid (HTML, Word, Google Docs, or plain text) and try again.")
 
 if __name__ == "__main__":
     main()
