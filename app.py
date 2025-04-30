@@ -61,6 +61,40 @@ def load_css():
         </style>
     """, unsafe_allow_html=True)
 
+def parse_blog_content(full_content: str) -> Tuple[str, str, List[str], str]:
+    """Parse full blog content to extract title, H1, headers, and main content."""
+    lines = full_content.split("\n")
+    title = ""
+    h1 = ""
+    headers = []
+    content_lines = []
+    in_content = False
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        # Title: First line starting with #
+        if not title and line.startswith("# ") and not in_content:
+            title = line[2:].strip()
+            continue
+        # H1: First line starting with ##
+        if not h1 and line.startswith("## ") and not in_content:
+            h1 = line[3:].strip()
+            continue
+        # Headers: Lines starting with ###
+        if line.startswith("### ") and not in_content:
+            headers.append(line[4:].strip())
+            continue
+        # Everything else is content
+        in_content = True
+        content_lines.append(line)
+
+    # Join content lines, removing any leading/trailing whitespace
+    content = "\n".join(content_lines).strip()
+    
+    return title, h1, headers, content
+
 class ContentRater:
     """Class to rate blog content for SEO and readability before publishing."""
     
@@ -384,13 +418,19 @@ def main():
     """Streamlit app for content rating."""
     load_css()
     st.title("Pre-Publishing Content Rating Tool")
-    st.markdown("Enter your blog content details to get an SEO and readability score.")
+    st.markdown("Paste your full blog content below (including title, H1, and headers) and provide additional details to get an SEO and readability score.")
+    st.markdown("""
+        **Expected Blog Format:**
+        ```
+        # Blog Title
+        ## H1 Tag
+        ### H2 or H3 Header
+        Main content paragraphs...
+        ```
+    """)
 
     with st.form("content_form"):
-        title = st.text_input("Blog Title", placeholder="Best Running Shoes for 2025")
-        h1 = st.text_input("H1 Tag", placeholder="Top Running Shoes Reviewed")
-        headers = st.text_area("Headers (H2/H3, one per line)", placeholder="Why Choose Quality Shoes?\nTop Picks for 2025")
-        content = st.text_area("Main Content", placeholder="Running shoes are essential for performance...", height=200)
+        full_content = st.text_area("Full Blog Content", placeholder="# Best Running Shoes for 2025\n## Top Running Shoes Reviewed\n### Why Choose Quality Shoes?\nRunning shoes are essential for performance...", height=300)
         image_count = st.number_input("Number of Images", min_value=0, value=0)
         image_alt_texts = st.text_area("Image Alt Texts (one per line)", placeholder="Running shoes on trail\nBest athletic shoes")
         internal_links = st.text_area("Internal Links (one per line)", placeholder="/shoe-care\n/running-tips")
@@ -399,31 +439,38 @@ def main():
         submit = st.form_submit_button("Rate Content")
 
     if submit:
-        if not all([title, h1, content, main_keyword]):
-            st.error("Please fill in all required fields (Title, H1, Content, Main Keyword).")
+        if not full_content or not main_keyword:
+            st.error("Please fill in all required fields (Full Blog Content, Main Keyword).")
         else:
-            headers_list = [h for h in headers.split("\n") if h.strip()] if headers else []
-            image_alt_list = [alt for alt in image_alt_texts.split("\n") if alt.strip()] if image_alt_texts else []
-            internal_links_list = [link for link in internal_links.split("\n") if link.strip()] if internal_links else []
-            secondary_keywords_list = [kw for kw in secondary_keywords.split("\n") if kw.strip()] if secondary_keywords else []
-
             try:
-                rater = ContentRater(
-                    title=title,
-                    h1=h1,
-                    headers=headers_list,
-                    content=content,
-                    image_count=image_count,
-                    image_alt_texts=image_alt_list,
-                    internal_links=internal_links_list,
-                    main_keyword=main_keyword,
-                    secondary_keywords=secondary_keywords_list
-                )
-                report = rater.generate_report()
-                st.markdown(f"<div class='report-box'><p class='score'>Final Score: {rater.score:.2f}/100</p>{report}</div>", unsafe_allow_html=True)
+                # Parse the full blog content
+                title, h1, headers, content = parse_blog_content(full_content)
+                
+                # Process other inputs
+                image_alt_list = [alt for alt in image_alt_texts.split("\n") if alt.strip()] if image_alt_texts else []
+                internal_links_list = [link for link in internal_links.split("\n") if link.strip()] if internal_links else []
+                secondary_keywords_list = [kw for kw in secondary_keywords.split("\n") if kw.strip()] if secondary_keywords else []
+
+                # Check if parsed components are present
+                if not all([title, h1, content]):
+                    st.error("Invalid blog format. Ensure the content includes a title (#), H1 (##), and main content.")
+                else:
+                    rater = ContentRater(
+                        title=title,
+                        h1=h1,
+                        headers=headers,
+                        content=content,
+                        image_count=image_count,
+                        image_alt_texts=image_alt_list,
+                        internal_links=internal_links_list,
+                        main_keyword=main_keyword,
+                        secondary_keywords=secondary_keywords_list
+                    )
+                    report = rater.generate_report()
+                    st.markdown(f"<div class='report-box'><p class='score'>Final Score: {rater.score:.2f}/100</p>{report}</div>", unsafe_allow_html=True)
             except Exception as e:
                 st.error(f"Error processing content: {str(e)}")
-                st.markdown("Please ensure all inputs are valid and try again.")
+                st.markdown("Please ensure all inputs are valid and follow the expected format, then try again.")
 
 if __name__ == "__main__":
     main()
