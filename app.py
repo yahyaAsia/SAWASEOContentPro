@@ -104,14 +104,44 @@ class ContentRater:
             if scores['title_tag'] < 50:
                 self.feedback.append("Title tag missing main keyword or too long (>70 chars).")
 
-        # H1 tag (2025: one H1 with keyword)
+        # H1 tag (2025: single, descriptive, keyword-rich, concise, intent-aligned, natural)
         if self.h1:
-            if self.main_keyword in self.h1.lower():
-                scores['h1_tag'] += 80
-            if len(self.h1) <= 70:
+            # Single H1 (assumed, advise in feedback)
+            scores['h1_tag'] += 10
+            # Descriptive and relevant (>3 words)
+            if len(self.h1.split()) > 3:
                 scores['h1_tag'] += 20
-            if scores['h1_tag'] < 50:
-                self.feedback.append("H1 tag missing main keyword or too long (>70 chars).")
+            else:
+                self.feedback.append("H1 tag too short; make it descriptive (>3 words).")
+            # Primary keyword
+            if self.main_keyword in self.h1.lower():
+                scores['h1_tag'] += 30
+            else:
+                self.feedback.append("H1 tag missing main keyword.")
+            # Search intent (approximate with intent-related words)
+            intent_words = ['how', 'what', 'why', 'best', 'top', 'guide', 'buy', 'review']
+            if any(word in self.h1.lower() for word in intent_words):
+                scores['h1_tag'] += 10
+            else:
+                self.feedback.append("H1 tag may not align with search intent; include words like 'how', 'best', or 'guide'.")
+            # Concise length (<=60 chars ideal, <=70 acceptable)
+            if len(self.h1) <= 60:
+                scores['h1_tag'] += 20
+            elif len(self.h1) <= 70:
+                scores['h1_tag'] += 10
+                self.feedback.append("H1 tag slightly long; aim for <60 chars.")
+            else:
+                self.feedback.append("H1 tag too long (>70 chars); keep it concise.")
+            # Natural language (avoid keyword stuffing)
+            keyword_count = self.h1.lower().count(self.main_keyword)
+            if keyword_count <= 2:
+                scores['h1_tag'] += 10
+            else:
+                self.feedback.append("H1 tag may be keyword-stuffed; use keyword once or twice.")
+            # Feedback for other factors
+            self.feedback.append("Ensure H1 is unique across pages and placed prominently as the main headline.")
+        else:
+            self.feedback.append("H1 tag missing; include a descriptive, keyword-rich H1.")
 
         # Keyword usage (2025: 1-2% main, 0.5-1% secondary)
         words = self.content.lower().split()
@@ -248,7 +278,7 @@ class ContentRater:
             self.feedback.append("Adjust subheading frequency (1 per 250-300 words).")
         else:
             scores['subheading_density'] = 30
-            self.feedback.append("Poor subheading density; aim for 1 per 250-300 words.")
+            self client_feedback.append("Poor subheading density; aim for 1 per 250-300 words.")
 
         return scores
 
@@ -284,7 +314,9 @@ class ContentRater:
         for feedback in self.feedback:
             report.append(f"- {feedback}")
         report.append("\n**Improvement Tips:**")
-        report.append("- Ensure title and H1 include main keyword and are <70 chars.")
+        report.append("- Ensure title and H1 include main keyword and are <60 chars for H1, <70 for title.")
+        report.append("- Make H1 descriptive (>3 words), aligned with search intent, and natural.")
+        report.append("- Use only one H1 per page, unique across pages, and place it prominently.")
         report.append("- Aim for 1-2% main keyword density, 0.5-1% secondary.")
         report.append("- Write 1500+ words for in-depth content.")
         report.append("- Use multiple H2/H3 for structure (1 per 250-300 words).")
