@@ -122,8 +122,7 @@ class ContentRater:
             'keyword_usage': 0.0,
             'content_depth': 0.0,
             'heading_structure': 0.0,
-            'internal_links': 0.0,
-            'eeat_signals': 0.0
+            'internal_links': 0.0
         }
 
         # Title tag (2025: front-load keyword, 60-70 chars)
@@ -292,13 +291,6 @@ class ContentRater:
             scores['internal_links'] = 30
             self.feedback.append("No internal links; include 2-5 per 1000 words.")
 
-        # E-E-A-T signals (2025: author mention, related keywords)
-        if any(kw in self.content.lower() for kw in ['author', 'expert', 'source', 'citation']):
-            scores['eeat_signals'] = 100
-        else:
-            scores['eeat_signals'] = 30
-            self.feedback.append("Mention author or sources for E-E-A-T.")
-
         return scores
 
     def evaluate_readability(self) -> Dict[str, float]:
@@ -309,34 +301,43 @@ class ContentRater:
             'subheading_density': 0.0
         }
 
-        # Flesch-Kincaid score (2025: 60-70 for general audience)
-        try:
-            flesch_score = textstat.flesch_reading_ease(self.content)
-            if 60 <= flesch_score <= 70:
-                scores['flesch_score'] = 100
-            elif 50 <= flesch_score < 60 or 70 < flesch_score <= 80:
-                scores['flesch_score'] = 70
-                self.feedback.append("Flesch score slightly off (aim for 60-70).")
-            else:
-                scores['flesch_score'] = 30
-                self.feedback.append("Flesch score too low/high; adjust for general audience.")
-        except Exception as e:
+        # Flesch-Kincaid score (2025: 30-50 for academic/technical audience)
+        word_count = len(self.content.split())
+        if word_count < 50:
             scores['flesch_score'] = 0
-            self.feedback.append(f"Error calculating Flesch score: {str(e)}")
+            self.feedback.append("Content too short for reliable readability scoring.")
+        else:
+            try:
+                flesch_score = textstat.flesch_reading_ease(self.content)
+                if 30 <= flesch_score <= 50:
+                    scores['flesch_score'] = 100
+                elif 10 <= flesch_score < 30 or 50 < flesch_score <= 60:
+                    scores['flesch_score'] = 70
+                    self.feedback.append("Flesch score slightly off; aim for 30-50 for academic/technical content.")
+                else:
+                    scores['flesch_score'] = 30
+                    self.feedback.append("Flesch score too low/high; adjust for academic/technical audience (30-50).")
+            except Exception as e:
+                scores['flesch_score'] = 0
+                self.feedback.append(f"Error calculating Flesch score: {str(e)}")
 
-        # Sentence length (2025: <25% sentences >20 words)
+        # Sentence length (2025: <25% sentences >25 words for academic/technical)
         try:
             sentences = sent_tokenize(self.content)
-            long_sentences = sum(1 for sent in sentences if len(sent.split()) > 20)
-            long_sentence_ratio = (long_sentences / len(sentences)) * 100 if sentences else 100
-            if long_sentence_ratio <= 25:
-                scores['sentence_length'] = 100
-            elif long_sentence_ratio <= 40:
-                scores['sentence_length'] = 70
-                self.feedback.append("Too many long sentences; keep most under 20 words.")
+            if len(sentences) < 5:
+                scores['sentence_length'] = 0
+                self.feedback.append("Too few sentences for reliable analysis.")
             else:
-                scores['sentence_length'] = 30
-                self.feedback.append("Excessive long sentences; simplify for readability.")
+                long_sentences = sum(1 for sent in sentences if len(sent.split()) > 25)
+                long_sentence_ratio = (long_sentences / len(sentences)) * 100
+                if long_sentence_ratio <= 25:
+                    scores['sentence_length'] = 100
+                elif long_sentence_ratio <= 40:
+                    scores['sentence_length'] = 70
+                    self.feedback.append("Too many long sentences; keep most under 25 words.")
+                else:
+                    scores['sentence_length'] = 30
+                    self.feedback.append("Excessive long sentences; simplify for readability.")
         except LookupError:
             scores['sentence_length'] = 0
             self.feedback.append("Sentence tokenization failed; ensure NLTK 'punkt' is installed.")
@@ -344,18 +345,60 @@ class ContentRater:
             scores['sentence_length'] = 0
             self.feedback.append(f"Error analyzing sentence length: {str(e)}")
 
-        # Subheading density (2025: 1 subheading per 250-300 words)
-        word_count = len(self.content.split())
-        subheading_count = len(self.headers)
-        words_per_subheading = word_count / subheading_count if subheading_count > 0 else float('inf')
-        if 250 <= words_per_subheading <= 300:
-            scores['subheading_density'] = 100
-        elif 200 <= words_per_subheading < 250 or 300 < words_per_subheading <= 400:
-            scores['subheading_density'] = 70
-            self.feedback.append("Adjust subheading frequency (1 per 250-300 words).")
+        # Subheading density (2025: 200-400 words per header, keyword mapping, readability)
+        if word_count < 50:
+            scores['subheading_density'] = 0
+            self.feedback.append("Content too short for reliable subheading analysis.")
+        elif not self.headers:
+            scores['subheading_density'] = 0
+            self.feedback.append("No H2/H3 subheadings; add at least one for structure.")
         else:
-            scores['subheading_density'] = 30
-            self.feedback.append("Poor subheading density; aim for 1 per 250-300 words.")
+            words_per_subheading = word_count / len(self.headers)
+            # Header-to-keyword mapping
+            headers_with_keywords = 0
+            for header in self.headers:
+                header_lower = header.lower()
+                keywords_in_header = sum(1 for kw in self.secondary_keywords if re.search(r'\b' + re.escape(kw) + r'\b', header_lower, re.IGNORECASE))
+                if 1 <= keywords_in_header <= 2:
+                    headers_with_keywords += 1
+            keyword_mapping_score = 30 if headers_with_keywords >= len(self.headers) else 15 if headers_with_keywords > 0 else 0
+            if keyword_mapping_score < 30:
+                self.feedback.append("Assign 1-2 secondary keywords to each H2/H3 for topical depth.")
+
+            # Semantic analysis (simple: check if headers share words with main keyword)
+            primary_words = set(self.main_keyword.split())
+            semantic_score = 20
+            for header in self.headers:
+                header_words = set(header.lower().split())
+                if not any(word in header_words for word in primary_words):
+                    semantic_score = 10
+                    self.feedback.append(f"Header '{header}' may lack topical relevance; include main keyword terms.")
+                    break
+
+            # Readability audit (inspired by Yoast/Hemingway)
+            readability_score = 20
+            for header in self.headers:
+                header_words = len(header.split())
+                if header_words > 10:
+                    self.feedback.append(f"Header '{header}' too long (>10 words); keep concise.")
+                    readability_score = 10
+                    break
+                if not any(word in header.lower() for word in ['how', 'what', 'why', 'guide', 'tips', 'best', 'top']):
+                    self.feedback.append(f"Header '{header}' lacks clarity; use descriptive/actionable terms.")
+                    readability_score = 10
+                    break
+
+            # Words-per-subheading scoring
+            density_score = 30
+            if 200 <= words_per_subheading <= 400:
+                density_score = 50
+            elif 150 <= words_per_subheading < 200 or 400 < words_per_subheading <= 500:
+                density_score = 30
+                self.feedback.append("Adjust subheading frequency (1 per 200-400 words).")
+            else:
+                self.feedback.append("Poor subheading density; aim for 1 per 200-400 words.")
+
+            scores['subheading_density'] = keyword_mapping_score + semantic_score + readability_score + density_score
 
         return scores
 
@@ -398,11 +441,12 @@ class ContentRater:
         report.append("- Use conversational or long-tail keywords for voice search.")
         report.append("- Ensure secondary keywords are semantically relevant to primary keyword.")
         report.append("- Write 1500+ words for in-depth content.")
-        report.append("- Use multiple H2/H3 for structure (1 per 250-300 words).")
+        report.append("- Use multiple H2/H3 for structure (1 per 200-400 words).")
+        report.append("- Assign 1-2 secondary keywords to each H2/H3 for topical depth.")
+        report.append("- Ensure headers are concise (<10 words) and include descriptive terms.")
         report.append("- Add 2-5 internal links per 1000 words.")
-        report.append("- Mention author or sources for E-E-A-T.")
-        report.append("- Target Flesch score of 60-70 for readability.")
-        report.append("- Keep sentences short (<20 words).")
+        report.append("- Target Flesch score of 30-50 for academic/technical readability.")
+        report.append("- Keep sentences under 25 words for clarity.")
 
         return "\n".join(report)
 
