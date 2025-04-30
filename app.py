@@ -1,559 +1,324 @@
 import streamlit as st
-import requests
-from bs4 import BeautifulSoup
-import validators
-import urllib.parse
-import json
-from googleapiclient.discovery import build
-import io
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-import os
-import aiohttp
-import asyncio
-from collections import Counter
-import re
-from functools import lru_cache
-import logging
-from textstat import flesch_reading_ease, avg_sentence_length
+import textstat
 import nltk
-from nltk.tokenize import word_tokenize
-from nltk.probability import FreqDist
+from nltk.tokenize import sent_tokenize
+import re
+from typing import Dict, List, Tuple
+import uuid
 
-# Download NLTK data
-nltk.download('punkt', quiet=True)
+# Custom CSS for professional UI/UX
+def load_css():
+    st.markdown("""
+        <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #f4f7fa;
+        }
+        .stApp {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1, h2, h3 {
+            color: #1a3c6d;
+        }
+        .stTextInput, .stTextArea, .stNumberInput {
+            border-radius: 5px;
+            border: 1px solid #d1d5db;
+            padding: 10px;
+        }
+        .stButton>button {
+            background-color: #1a3c6d;
+            color: white;
+            border-radius: 5px;
+            padding: 10px 20px;
+            font-weight: bold;
+        }
+        .stButton>button:hover {
+            background-color: #2a5b9e;
+        }
+        .report-box {
+            background-color: #ffffff;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-top: 20px;
+        }
+        .score {
+            font-size: 24px;
+            font-weight: bold;
+            color: #28a745;
+        }
+        .feedback {
+            color: #dc3545;
+        }
+        </style>
+    """, unsafe_allow_html=True)
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+class ContentRater:
+    """Class to rate blog content for SEO and readability before publishing."""
+    
+    def __init__(self, title: str, h1: str, headers: List[str], content: str, 
+                 image_count: int, image_alt_texts: List[str], internal_links: List[str], 
+                 main_keyword: str, secondary_keywords: List[str]):
+        """Initialize with content details."""
+        self.title = title.strip()
+        self.h1 = h1.strip()
+        self.headers = [h.strip() for h in headers]
+        self.content = content.strip()
+        self.image_count = image_count
+        self.image_alt_texts = [alt.strip() for alt in image_alt_texts]
+        self.internal_links = [link.strip() for link in internal_links]
+        self.main_keyword = main_keyword.lower().strip()
+        self.secondary_keywords = [kw.lower().strip() for kw in secondary_keywords]
+        self.score = 0
+        self.feedback = []
 
-# Load PageSpeed API Key from Streamlit secrets
-PAGESPEED_API_KEY = os.getenv("PAGESPEED_API_KEY")
+    def evaluate_seo(self) -> Dict[str, float]:
+        """Evaluate SEO factors and return scores."""
+        scores = {
+            'title_tag': 0.0,
+            'h1_tag': 0.0,
+            'keyword_usage': 0.0,
+            'content_depth': 0.0,
+            'heading_structure': 0.0,
+            'image_optimization': 0.0,
+            'internal_links': 0.0,
+            'eeat_signals': 0.0
+        }
 
-# Function to fetch page content
-def get_page_content(url):
-    try:
-        logger.info(f"Fetching content for {url}")
-        response = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-        response.raise_for_status()
-        return response.text
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error fetching {url}: {e}")
-        return None
+        # Title tag (2025: front-load keyword, 60-70 chars)
+        if self.title:
+            if len(self.title) <= 70:
+                scores['title_tag'] += 50
+            if self.main_keyword in self.title.lower():
+                scores['title_tag'] += 50
+                if self.title.lower().startswith(self.main_keyword):
+                    scores['title_tag'] += 20
+            if scores['title_tag'] < 50:
+                self.feedback.append("Title tag missing main keyword or too long (>70 chars).")
 
-# Function to analyze metadata and score
-def analyze_metadata(soup):
-    metadata = {}
-    score = 0
-    feedback = []
+        # H1 tag (2025: one H1 with keyword)
+        if self.h1:
+            if self.main_keyword in self.h1.lower():
+                scores['h1_tag'] += 80
+            if len(self.h1) <= 70:
+                scores['h1_tag'] += 20
+            if scores['h1_tag'] < 50:
+                self.feedback.append("H1 tag missing main keyword or too long (>70 chars).")
 
-    title = soup.title.string.strip() if soup.title else ""
-    metadata["Title"] = title if title else "❌ No Title Found"
-    title_length = len(title)
-    if 50 <= title_length <= 60:
-        score += 5
-    elif title_length > 0:
-        score += 2
-        feedback.append("Title length should be 50–60 characters.")
-    else:
-        feedback.append("Missing title tag. Add a relevant title (50–60 characters).")
+        # Keyword usage (2025: 1-2% main, 0.5-1% secondary)
+        words = self.content.lower().split()
+        word_count = len(words)
+        main_keyword_count = sum(1 for word in words if self.main_keyword in word)
+        secondary_keyword_count = sum(1 for word in words for kw in self.secondary_keywords if kw in word)
+        main_density = (main_keyword_count / word_count) * 100 if word_count > 0 else 0
+        secondary_density = (secondary_keyword_count / word_count) * 100 if word_count > 0 else 0
+        if 1 <= main_density <= 2:
+            scores['keyword_usage'] += 60
+        elif 0 < main_density < 1:
+            scores['keyword_usage'] += 30
+            self.feedback.append("Main keyword density too low (<1%).")
+        elif main_density > 2:
+            scores['keyword_usage'] += 20
+            self.feedback.append("Main keyword density too high (>2%), possible stuffing.")
+        else:
+            self.feedback.append("Main keyword not found in content.")
+        if 0.5 <= secondary_density <= 1:
+            scores['keyword_usage'] += 40
+        elif secondary_density > 1:
+            scores['keyword_usage'] += 20
+            self.feedback.append("Secondary keyword density too high (>1%).")
+        else:
+            self.feedback.append("Secondary keywords underused (<0.5%).")
 
-    meta_desc = soup.find("meta", attrs={"name": "description"})
-    meta_desc_content = meta_desc["content"].strip() if meta_desc and meta_desc.get("content") else ""
-    metadata["Meta Description"] = meta_desc_content if meta_desc_content else "❌ No Meta Description Found"
-    desc_length = len(meta_desc_content)
-    if 120 <= desc_length <= 160:
-        score += 5
-    elif desc_length > 0:
-        score += 2
-        feedback.append("Meta description should be 120–160 characters.")
-    else:
-        feedback.append("Missing meta description. Add one (120–160 characters).")
+        # Content depth (2025: 1500+ words)
+        if word_count >= 1500:
+            scores['content_depth'] = 100
+        elif word_count >= 800:
+            scores['content_depth'] = 70
+            self.feedback.append("Content is decent but aim for 1500+ words.")
+        else:
+            scores['content_depth'] = 30
+            self.feedback.append("Content too short (<800 words).")
 
-    return metadata, score, feedback
+        # Heading structure (2025: multiple H2/H3 for skimmability)
+        h2_h3_count = len(self.headers)
+        if h2_h3_count >= 3:
+            scores['heading_structure'] = 100
+        elif h2_h3_count >= 1:
+            scores['heading_structure'] = 60
+            self.feedback.append("Add more H2/H3 subheadings for better structure.")
+        else:
+            scores['heading_structure'] = 30
+            self.feedback.append("Missing H2/H3 tags; ensure multiple subheadings.")
 
-# Function to analyze headlines and score
-def analyze_headlines(soup):
-    headlines = {
-        "H1": [h.get_text(strip=True) for h in soup.find_all("h1")],
-        "H2": [h.get_text(strip=True) for h in soup.find_all("h2")],
-        "H3": [h.get_text(strip=True) for h in soup.find_all("h3")]
-    }
-    score = 0
-    feedback = []
-
-    if len(headlines["H1"]) == 1:
-        score += 5
-    elif len(headlines["H1"]) == 0:
-        feedback.append("Missing H1 tag. Add exactly one H1 with primary keyword.")
-    else:
-        score += 2
-        feedback.append("Multiple H1 tags found. Use exactly one H1.")
-
-    if len(headlines["H2"]) >= 2:
-        score += 3
-    elif len(headlines["H2"]) > 0:
-        score += 1
-        feedback.append("Add more H2 tags (at least 2) for better structure.")
-    else:
-        feedback.append("No H2 tags found. Add H2s for content hierarchy.")
-
-    if len(headlines["H3"]) >= 1:
-        score += 2
-    else:
-        feedback.append("Consider adding H3 tags for deeper content structure.")
-
-    return headlines, score, feedback
-
-# Asynchronous function to check a single link
-async def check_link(session, url):
-    try:
-        async with session.head(url, timeout=5) as response:
-            return url, response.status < 400
-    except Exception as e:
-        logger.error(f"Error checking link {url}: {e}")
-        return url, False
-
-# Function to analyze links and score
-async def analyze_links(soup, base_url):
-    links = soup.find_all("a", href=True)
-    internal_links = []
-    external_links = []
-    broken_links = []
-
-    async with aiohttp.ClientSession() as session:
-        tasks = []
-        for link in links[:50]:
-            href = link["href"]
-            full_url = urllib.parse.urljoin(base_url, href)
-            if base_url in full_url:
-                internal_links.append(full_url)
-                tasks.append(check_link(session, full_url))
+        # Image optimization (2025: alt text with keywords, 1-3 images per 1000 words)
+        if self.image_count > 0:
+            images_per_1000 = (self.image_count / (word_count / 1000)) if word_count > 0 else 0
+            if 1 <= images_per_1000 <= 3:
+                scores['image_optimization'] += 50
             else:
-                external_links.append(full_url)
-                tasks.append(check_link(session, full_url))
-
-        results = await asyncio.gather(*tasks)
-        broken_links = [url for url, is_valid in results if not is_valid]
-
-    score = 0
-    feedback = []
-    if len(internal_links) >= 5:
-        score += 5
-    elif len(internal_links) > 0:
-        score += 2
-        feedback.append("Add more internal links (5+ recommended).")
-    else:
-        feedback.append("No internal links found. Add links to related pages.")
-
-    if len(external_links) >= 1:
-        score += 5
-    else:
-        feedback.append("No external links. Link to high-authority sites.")
-
-    if len(broken_links) == 0:
-        score += 5
-    else:
-        score += 2
-        feedback.append(f"Found {len(broken_links)} broken links. Fix them.")
-
-    return internal_links, external_links, broken_links, score, feedback
-
-# Function to analyze content and score
-def analyze_content(soup):
-    text = soup.get_text(strip=True)
-    tokens = word_tokenize(text.lower())
-    fdist = FreqDist(tokens)
-    word_count = len(tokens)
-    score = 0
-    feedback = []
-
-    # Word Count
-    if word_count >= 1000:
-        score += 10
-    elif word_count >= 300:
-        score += 5
-        feedback.append("Increase word count to 1000+ for better SEO.")
-    else:
-        feedback.append("Content too short. Aim for at least 300 words.")
-
-    # Readability
-    readability = flesch_reading_ease(text) if text else 0
-    if readability >= 60:
-        score += 5
-    elif readability >= 30:
-        score += 2
-        feedback.append("Improve readability (Flesch score 60+).")
-    else:
-        feedback.append("Content is hard to read. Simplify language.")
-
-    # Keyword Density
-    keywords = extract_keywords(soup, top_n=1)
-    primary_keyword = list(keywords.keys())[0] if keywords else ""
-    keyword_count = keywords.get(primary_keyword, 0)
-    density = (keyword_count / word_count * 100) if word_count > 0 else 0
-    if 1 <= density <= 2:
-        score += 5
-    elif density > 0:
-        score += 2
-        feedback.append("Adjust primary keyword density to 1–2%.")
-    else:
-        feedback.append("No primary keyword detected. Optimize content.")
-
-    avg_sentence_len = avg_sentence_length(text) if text else 0
-
-    return word_count, readability, primary_keyword, density, avg_sentence_len, score, feedback
-
-# Function to extract keywords
-def extract_keywords(soup, top_n=5):
-    text = soup.get_text(strip=True)
-    words = word_tokenize(text.lower())
-    stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by'}
-    keywords = [word for word in words if word not in stop_words and len(word) > 3]
-    keyword_counts = Counter(keywords)
-    return dict(keyword_counts.most_common(top_n))
-
-# Function to analyze images and alt texts
-def analyze_images(soup):
-    images = soup.find_all("img")
-    image_data = []
-    score = 0
-    feedback = []
-
-    for img in images:
-        src = img.get("src", "❌ No Src")
-        alt = img.get("alt", "❌ No Alt Text")
-        image_data.append({"src": src, "alt": alt})
-
-    if len(image_data) >= 3:
-        score += 5
-    elif len(image_data) > 0:
-        score += 2
-        feedback.append("Add more images (3+ recommended).")
-    else:
-        feedback.append("No images found. Add relevant images.")
-
-    alt_missing = sum(1 for img in image_data if img["alt"] == "❌ No Alt Text")
-    if alt_missing == 0 and len(image_data) > 0:
-        score += 5
-    elif alt_missing < len(image_data):
-        score += 2
-        feedback.append(f"{alt_missing} images missing alt text. Add descriptive alt texts.")
-    else:
-        feedback.append("All images lack alt text. Add alt texts for SEO.")
-
-    return image_data, score, feedback
-
-# Function to check technical SEO
-def analyze_technical_seo(soup, url):
-    metrics = {}
-    score = 0
-    feedback = []
-
-    canonical = soup.find("link", rel="canonical")
-    metrics["Canonical Tag"] = canonical["href"] if canonical and canonical.get("href") else "❌ No Canonical Tag"
-    if canonical and canonical.get("href"):
-        score += 5
-    else:
-        feedback.append("Missing canonical tag. Add one to specify the preferred URL.")
-
-    robots = soup.find("meta", attrs={"name": "robots"})
-    metrics["Robots Meta"] = robots["content"] if robots and robots.get("content") else "❌ No Robots Meta"
-    if robots and "noindex" not in robots.get("content", "").lower():
-        score += 3
-    else:
-        feedback.append("Robots meta missing or set to noindex. Ensure indexing is allowed.")
-
-    scripts = soup.find_all("script", type="application/ld+json")
-    metrics["Structured Data"] = "✅ Present" if scripts else "❌ Not Found"
-    if scripts:
-        score += 4
-    else:
-        feedback.append("No structured data found. Add Schema.org markup.")
-
-    metrics["HTTPS"] = "✅ Secure" if url.startswith("https") else "❌ Not Secure"
-    if url.startswith("https"):
-        score += 3
-    else:
-        feedback.append("Use HTTPS for security and SEO.")
-
-    return metrics, score, feedback
-
-# Function to get Google PageSpeed Insights
-@lru_cache(maxsize=100)
-def get_pagespeed_insights(url, strategy="mobile"):
-    try:
-        if not PAGESPEED_API_KEY:
-            return {
-                "Performance Score": "⚠️ API Key Missing",
-                "Core Web Vitals": {},
-                "Mobile Friendliness": "N/A",
-                "Error": "No valid API Key found. Set PAGESPEED_API_KEY in Streamlit secrets.",
-                "Strategy": strategy.capitalize(),
-                "SEO Score": 0,
-                "Feedback": ["Set PAGESPEED_API_KEY in Streamlit secrets."]
-            }
-
-        logger.info(f"Fetching PageSpeed Insights for {url} ({strategy})")
-        service = build("pagespeedonline", "v5", developerKey=PAGESPEED_API_KEY)
-        result = service.pagespeedapi().runpagespeed(url=url, strategy=strategy).execute()
-
-        lighthouse_data = result.get("lighthouseResult", {})
-        categories = lighthouse_data.get("categories", {})
-        audits = lighthouse_data.get("audits", {})
-
-        performance_score = categories.get("performance", {}).get("score")
-        performance_score = round(performance_score * 100) if performance_score is not None else 0
-
-        core_web_vitals = {
-            "First Contentful Paint (FCP)": audits.get("first-contentful-paint", {}).get("displayValue", "N/A"),
-            "Largest Contentful Paint (LCP)": audits.get("largest-contentful-paint", {}).get("displayValue", "N/A"),
-            "Cumulative Layout Shift (CLS)": audits.get("cumulative-layout-shift", {}).get("displayValue", "N/A"),
-            "Total Blocking Time (TBT)": audits.get("total-blocking-time", {}).get("displayValue", "N/A"),
-            "Speed Index": audits.get("speed-index", {}).get("displayValue", "N/A"),
-        }
-
-        mobile_friendly = audits.get("is-crawlable", {}).get("score", 0) == 1
-        mobile_friendly = "✅ Mobile-Friendly" if mobile_friendly else "❌ Not Mobile-Friendly"
-
-        score = 0
-        feedback = []
-        if performance_score >= 90:
-            score += 10
-        elif performance_score >= 50:
-            score += 5
-            feedback.append("Improve page speed (target 90+ for best results).")
-        else:
-            feedback.append("Page speed is low. Optimize assets and server response.")
-
-        if mobile_friendly == "✅ Mobile-Friendly":
-            score += 5
-        else:
-            feedback.append("Ensure the page is mobile-friendly.")
-
-        cwv_pass = sum(1 for k, v in core_web_vitals.items() if v != "N/A" and "s" in v and float(v.split()[0]) < 2.5)
-        if cwv_pass >= 3:
-            score += 5
-        else:
-            feedback.append("Optimize Core Web Vitals (FCP, LCP, CLS).")
-
-        return {
-            "Performance Score": performance_score,
-            "Core Web Vitals": core_web_vitals,
-            "Mobile Friendliness": mobile_friendly,
-            "Strategy": strategy.capitalize(),
-            "SEO Score": score,
-            "Feedback": feedback
-        }
-
-    except Exception as e:
-        logger.error(f"PageSpeed API error for {url}: {e}")
-        return {
-            "Performance Score": "⚠️ Not Available",
-            "Core Web Vitals": {},
-            "Mobile Friendliness": "N/A",
-            "Error": str(e),
-            "Strategy": strategy.capitalize(),
-            "SEO Score": 0,
-            "Feedback": ["Failed to fetch PageSpeed data. Check API key and quota."]
-        }
-
-# Function to generate a PDF report
-def generate_pdf_report(url, analysis, total_score):
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter)
-    styles = getSampleStyleSheet()
-    story = []
-
-    story.append(Paragraph("SEO Content Rating Report 2025", styles["Title"]))
-    story.append(Spacer(1, 12))
-
-    story.append(Paragraph(f"Website: {url}", styles["Normal"]))
-    story.append(Paragraph(f"Total SEO Score: {total_score}/100", styles["Normal"]))
-    story.append(Spacer(1, 12))
-
-    story.append(Paragraph("🏷️ Metadata (10 points)", styles["Heading2"]))
-    story.append(Paragraph(f"Score: {analysis['metadata_score']}/10", styles["Normal"]))
-    story.append(Paragraph(f"Title: {analysis['metadata']['Title']}", styles["Normal"]))
-    story.append(Paragraph(f"Meta Description: {analysis['metadata']['Meta Description']}", styles["Normal"]))
-    for fb in analysis["metadata_feedback"]:
-        story.append(Paragraph(f"• {fb}", styles["Normal"]))
-    story.append(Spacer(1, 12))
-
-    story.append(Paragraph("📜 Headlines (10 points)", styles["Heading2"]))
-    story.append(Paragraph(f"Score: {analysis['headlines_score']}/10", styles["Normal"]))
-    for tag, headlines in analysis["headlines"].items():
-        story.append(Paragraph(f"{tag} Count: {len(headlines)}", styles["Normal"]))
-        for i, h in enumerate(headlines[:5], 1):
-            story.append(Paragraph(f"{tag} #{i}: {h}", styles["Normal"]))
-    for fb in analysis["headlines_feedback"]:
-        story.append(Paragraph(f"• {fb}", styles["Normal"]))
-    story.append(Spacer(1, 12))
-
-    story.append(Paragraph("📝 Content Quality (20 points)", styles["Heading2"]))
-    story.append(Paragraph(f"Score: {analysis['content_score']}/20", styles["Normal"]))
-    story.append(Paragraph(f"Word Count: {analysis['word_count']}", styles["Normal"]))
-    story.append(Paragraph(f"Readability (Flesch): {analysis['readability']:.1f}", styles["Normal"]))
-    story.append(Paragraph(f"Primary Keyword: {analysis['primary_keyword']}", styles["Normal"]))
-    story.append(Paragraph(f"Keyword Density: {analysis['keyword_density']:.2f}%", styles["Normal"]))
-    story.append(Paragraph(f"Average Sentence Length: {analysis['avg_sentence_len']:.1f} words", styles["Normal"]))
-    for fb in analysis["content_feedback"]:
-        story.append(Paragraph(f"• {fb}", styles["Normal"]))
-    story.append(Spacer(1, 12))
-
-    story.append(Paragraph("🔗 Links (15 points)", styles["Heading2"]))
-    story.append(Paragraph(f"Score: {analysis['links_score']}/15", styles["Normal"]))
-    story.append(Paragraph(f"Internal Links: {len(analysis['internal_links'])}", styles["Normal"]))
-    story.append(Paragraph(f"External Links: {len(analysis['external_links'])}", styles["Normal"]))
-    story.append(Paragraph(f"Broken Links: {len(analysis['broken_links'])}", styles["Normal"]))
-    for fb in analysis["links_feedback"]:
-        story.append(Paragraph(f"• {fb}", styles["Normal"]))
-    story.append(Spacer(1, 12))
-
-    story.append(Paragraph("🖼️ Images (10 points)", styles["Heading2"]))
-    story.append(Paragraph(f"Score: {analysis['images_score']}/10", styles["Normal"]))
-    story.append(Paragraph(f"Total Images: {len(analysis['images'])}", styles["Normal"]))
-    for i, img in enumerate(analysis["images"][:5], 1):
-        story.append(Paragraph(f"Image #{i} Src: {img['src']}", styles["Normal"]))
-        story.append(Paragraph(f"Image #{i} Alt: {img['alt']}", styles["Normal"]))
-    for fb in analysis["images_feedback"]:
-        story.append(Paragraph(f"• {fb}", styles["Normal"]))
-    story.append(Spacer(1, 12))
-
-    story.append(Paragraph("⚙️ Technical SEO (15 points)", styles["Heading2"]))
-    story.append(Paragraph(f"Score: {analysis['technical_seo_score']}/15", styles["Normal"]))
-    for metric, value in analysis["technical_seo"].items():
-        story.append(Paragraph(f"{metric}: {value}", styles["Normal"]))
-    for fb in analysis["technical_seo_feedback"]:
-        story.append(Paragraph(f"• {fb}", styles["Normal"]))
-    story.append(Spacer(1, 12))
-
-    story.append(Paragraph("⚡ PageSpeed Insights (20 points)", styles["Heading2"]))
-    score = analysis["pagespeed"].get("SEO Score", 0)
-    story.append(Paragraph(f"Score: {score}/20", styles["Normal"]))
-    story.append(Paragraph(f"Mobile Performance Score: {analysis['pagespeed']['Performance Score']}/100", styles["Normal"]))
-    story.append(Paragraph(f"Mobile Friendliness: {analysis['pagespeed']['Mobile Friendliness']}", styles["Normal"]))
-    for metric, value in analysis["pagespeed"].get("Core Web Vitals", {}).items():
-        story.append(Paragraph(f"{metric}: {value}", styles["Normal"]))
-    for fb in analysis["pagespeed"].get("Feedback", []):
-        story.append(Paragraph(f"• {fb}", styles["Normal"]))
-
-    doc.build(story)
-    buffer.seek(0)
-    return buffer
-
-# Streamlit UI
-st.set_page_config(page_title="SEO Content Rater 2025", layout="wide")
-st.title("🕵️‍♂️ SEO Content Rater 2025")
-st.markdown("Rate your website's content based on **2025 SEO best practices**. Compare with a competitor and get actionable insights.")
-
-url1 = st.text_input("🔗 Enter Your Website URL", "")
-url2 = st.text_input("🆚 Enter Competitor Website URL (Optional)", "")
-
-if st.button("🔍 Rate Content"):
-    if not (validators.url(url1) and (not url2 or validators.url(url2))):
-        st.error("❌ Please enter valid URLs.")
-        st.stop()
-
-    st.info("Analyzing content... Please wait.")
-    progress_bar = st.progress(0)
-    col1, col2 = st.columns(2) if url2 else (st, None)
-
-    async def analyze_website(url, column, report_name):
-        with column:
-            st.subheader(f"Website: {url}")
-            page_content = get_page_content(url)
-            progress_bar.progress(25)
-            if page_content:
-                soup = BeautifulSoup(page_content, "html.parser")
-                
-                metadata, metadata_score, metadata_feedback = analyze_metadata(soup)
-                headlines, headlines_score, headlines_feedback = analyze_headlines(soup)
-                word_count, readability, primary_keyword, keyword_density, avg_sentence_len, content_score, content_feedback = analyze_content(soup)
-                internal_links, external_links, broken_links, links_score, links_feedback = await analyze_links(soup, url)
-                images, images_score, images_feedback = analyze_images(soup)
-                technical_seo, technical_seo_score, technical_seo_feedback = analyze_technical_seo(soup, url)
-                pagespeed = get_pagespeed_insights(url)
-
-                analysis = {
-                    "metadata": metadata,
-                    "metadata_score": metadata_score,
-                    "metadata_feedback": metadata_feedback,
-                    "headlines": headlines,
-                    "headlines_score": headlines_score,
-                    "headlines_feedback": headlines_feedback,
-                    "word_count": word_count,
-                    "readability": readability,
-                    "primary_keyword": primary_keyword,
-                    "keyword_density": keyword_density,
-                    "avg_sentence_len": avg_sentence_len,
-                    "content_score": content_score,
-                    "content_feedback": content_feedback,
-                    "internal_links": internal_links,
-                    "external_links": external_links,
-                    "broken_links": broken_links,
-                    "links_score": links_score,
-                    "links_feedback": links_feedback,
-                    "images": images,
-                    "images_score": images_score,
-                    "images_feedback": images_feedback,
-                    "technical_seo": technical_seo,
-                    "technical_seo_score": technical_seo_score,
-                    "technical_seo_feedback": technical_seo_feedback,
-                    "pagespeed": pagespeed
-                }
-
-                total_score = (
-                    metadata_score +
-                    headlines_score +
-                    content_score +
-                    links_score +
-                    images_score +
-                    technical_seo_score +
-                    pagespeed.get("SEO Score", 0)
-                )
-                progress_bar.progress(75)
-
-                st.write(f"**Total SEO Score**: {total_score}/100")
-                st.write("**Metadata** (10 points)", {k: v for k, v in metadata.items()})
-                st.write(f"Score: {metadata_score}/10", metadata_feedback)
-                st.write("**Headlines** (10 points)", {k: v[:5] for k, v in headlines.items()})
-                st.write(f"Score: {headlines_score}/10", headlines_feedback)
-                st.write("**Content** (20 points)", {
-                    "Word Count": word_count,
-                    "Readability": f"{readability:.1f}",
-                    "Primary Keyword": primary_keyword,
-                    "Keyword Density": f"{keyword_density:.2f}%",
-                    "Avg Sentence Length": f"{avg_sentence_len:.1f} words"
-                })
-                st.write(f"Score: {content_score}/20", content_feedback)
-                st.write("**Links** (15 points)", {
-                    "Internal": len(internal_links),
-                    "External": len(external_links),
-                    "Broken": len(broken_links)
-                })
-                st.write(f"Score: {links_score}/15", links_feedback)
-                st.write("**Images** (10 points)", images[:5])
-                st.write(f"Score: {images_score}/10", images_feedback)
-                st.write("**Technical SEO** (15 points)", technical_seo)
-                st.write(f"Score: {technical_seo_score}/15", technical_seo_feedback)
-                st.write("**PageSpeed Insights** (20 points)", pagespeed)
-                st.write(f"Score: {pagespeed.get('SEO Score', 0)}/20", pagespeed.get("Feedback", []))
-
-                pdf_buffer = generate_pdf_report(url, analysis, total_score)
-                st.download_button(
-                    label="📄 Download Report",
-                    data=pdf_buffer,
-                    file_name=f"SEO_Content_Rating_{report_name}.pdf",
-                    mime="application/pdf",
-                )
+                scores['image_optimization'] += 20
+                self.feedback.append("Adjust image count (1-3 per 1000 words).")
+            if all(self.main_keyword in alt.lower() for alt in self.image_alt_texts):
+                scores['image_optimization'] += 50
             else:
-                st.error("❌ Could not fetch the webpage.")
-            progress_bar.progress(100)
+                self.feedback.append("Ensure all image alt texts include main keyword.")
+        else:
+            self.feedback.append("No images provided; include 1-3 per 1000 words.")
 
-    asyncio.run(analyze_website(url1, col1, "Primary"))
+        # Internal links (2025: 2-5 links per 1000 words)
+        links_per_1000 = (len(self.internal_links) / (word_count / 1000)) if word_count > 0 else 0
+        if 2 <= links_per_1000 <= 5:
+            scores['internal_links'] = 100
+        elif links_per_1000 > 0:
+            scores['internal_links'] = 60
+            self.feedback.append("Adjust internal links (2-5 per 1000 words).")
+        else:
+            scores['internal_links'] = 30
+            self.feedback.append("No internal links; include 2-5 per 1000 words.")
 
-    if url2 and col2:
-        progress_bar = st.progress(0)
-        asyncio.run(analyze_website(url2, col2, "Competitor"))
+        # E-E-A-T signals (2025: author mention, related keywords)
+        if any(kw in self.content.lower() for kw in ['author', 'expert', 'source', 'citation']):
+            scores['eeat_signals'] = 100
+        else:
+            scores['eeat_signals'] = 30
+            self.feedback.append("Mention author or sources for E-E-A-T.")
+
+        return scores
+
+    def evaluate_readability(self) -> Dict[str, float]:
+        """Evaluate readability factors and return scores."""
+        scores = {
+            'flesch_score': 0.0,
+            'sentence_length': 0.0,
+            'subheading_density': 0.0
+        }
+
+        # Flesch-Kincaid score (2025: 60-70 for general audience)
+        flesch_score = textstat.flesch_reading_ease(self.content)
+        if 60 <= flesch_score <= 70:
+            scores['flesch_score'] = 100
+        elif 50 <= flesch_score < 60 or 70 < flesch_score <= 80:
+            scores['flesch_score'] = 70
+            self.feedback.append("Flesch score slightly off (aim for 60-70).")
+        else:
+            scores['flesch_score'] = 30
+            self.feedback.append("Flesch score too low/high; adjust for general audience.")
+
+        # Sentence length (2025: <25% sentences >20 words)
+        sentences = sent_tokenize(self.content)
+        long_sentences = sum(1 for sent in sentences if len(sent.split()) > 20)
+        long_sentence_ratio = (long_sentences / len(sentences)) * 100 if sentences else 100
+        if long_sentence_ratio <= 25:
+            scores['sentence_length'] = 100
+        elif long_sentence_ratio <= 40:
+            scores['sentence_length'] = 70
+            self.feedback.append("Too many long sentences; keep most under 20 words.")
+        else:
+            scores['sentence_length'] = 30
+            self.feedback.append("Excessive long sentences; simplify for readability.")
+
+        # Subheading density (2025: 1 subheading per 250-300 words)
+        word_count = len(self.content.split())
+        subheading_count = len(self.headers)
+        words_per_subheading = word_count / subheading_count if subheading_count > 0 else float('inf')
+        if 250 <= words_per_subheading <= 300:
+            scores['subheading_density'] = 100
+        elif 200 <= words_per_subheading < 250 or 300 < words_per_subheading <= 400:
+            scores['subheading_density'] = 70
+            self.feedback.append("Adjust subheading frequency (1 per 250-300 words).")
+        else:
+            scores['subheading_density'] = 30
+            self.feedback.append("Poor subheading density; aim for 1 per 250-300 words.")
+
+        return scores
+
+    def calculate_final_score(self, seo_scores: Dict[str, float], readability_scores: Dict[str, float]) -> float:
+        """Calculate final score (60% SEO, 40% Readability)."""
+        seo_weight = 0.6
+        readability_weight = 0.4
+        seo_avg = sum(seo_scores.values()) / len(seo_scores)
+        readability_avg = sum(readability_scores.values()) / len(readability_scores)
+        self.score = (seo_avg * seo_weight) + (readability_avg * readability_weight)
+        return self.score
+
+    def generate_report(self) -> str:
+        """Generate detailed report with scores and feedback."""
+        seo_scores = self.evaluate_seo()
+        readability_scores = self.evaluate_readability()
+        final_score = self.calculate_final_score(seo_scores, readability_scores)
+
+        report = [
+            f"### Content Rating Report",
+            f"**Main Keyword**: {self.main_keyword}",
+            f"**Secondary Keywords**: {', '.join(self.secondary_keywords)}",
+            f"**Final Score**: {final_score:.2f}/100",
+            "",
+            "**SEO Scores:**"
+        ]
+        for factor, score in seo_scores.items():
+            report.append(f"- {factor.replace('_', ' ').title()}: {score:.2f}/100")
+        report.append("\n**Readability Scores:**")
+        for factor, score in readability_scores.items():
+            report.append(f"- {factor.replace('_', ' ').title()}: {score:.2f}/100")
+        report.append("\n**Feedback and Suggestions:**")
+        for feedback in self.feedback:
+            report.append(f"- {feedback}")
+        report.append("\n**Improvement Tips:**")
+        report.append("- Ensure title and H1 include main keyword and are <70 chars.")
+        report.append("- Aim for 1-2% main keyword density, 0.5-1% secondary.")
+        report.append("- Write 1500+ words for in-depth content.")
+        report.append("- Use multiple H2/H3 for structure (1 per 250-300 words).")
+        report.append("- Include 1-3 images per 1000 words with keyword-rich alt text.")
+        report.append("- Add 2-5 internal links per 1000 words.")
+        report.append("- Mention author or sources for E-E-A-T.")
+        report.append("- Target Flesch score of 60-70 for readability.")
+        report.append("- Keep sentences short (<20 words).")
+
+        return "\n".join(report)
+
+def main():
+    """Streamlit app for content rating."""
+    load_css()
+    st.title("Pre-Publishing Content Rating Tool")
+    st.markdown("Enter your blog content details to get an SEO and readability score.")
+
+    with st.form("content_form"):
+        title = st.text_input("Blog Title", placeholder="Best Running Shoes for 2025")
+        h1 = st.text_input("H1 Tag", placeholder="Top Running Shoes Reviewed")
+        headers = st.text_area("Headers (H2/H3, one per line)", placeholder="Why Choose Quality Shoes?\nTop Picks for 2025")
+        content = st.text_area("Main Content", placeholder="Running shoes are essential for performance...", height=200)
+        image_count = st.number_input("Number of Images", min_value=0, value=0)
+        image_alt_texts = st.text_area("Image Alt Texts (one per line)", placeholder="Running shoes on trail\nBest athletic shoes")
+        internal_links = st.text_area("Internal Links (one per line)", placeholder="/shoe-care\n/running-tips")
+        main_keyword = st.text_input("Main Keyword", placeholder="best running shoes")
+        secondary_keywords = st.text_area("Secondary Keywords (one per line)", placeholder="running footwear\nathletic shoes")
+        submit = st.form_submit_button("Rate Content")
+
+    if submit:
+        if not all([title, h1, content, main_keyword]):
+            st.error("Please fill in all required fields (Title, H1, Content, Main Keyword).")
+        else:
+            headers_list = headers.split("\n") if headers else []
+            image_alt_list = image_alt_texts.split("\n") if image_alt_texts else []
+            internal_links_list = internal_links.split("\n") if internal_links else []
+            secondary_keywords_list = secondary_keywords.split("\n") if secondary_keywords else []
+
+            rater = ContentRater(
+                title=title,
+                h1=h1,
+                headers=headers_list,
+                content=content,
+                image_count=image_count,
+                image_alt_texts=image_alt_list,
+                internal_links=internal_links_list,
+                main_keyword=main_keyword,
+                secondary_keywords=secondary_keywords_list
+            )
+            report = rater.generate_report()
+            st.markdown(f"<div class='report-box'><p class='score'>Final Score: {rater.score:.2f}/100</p>{report}</div>", unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main()
