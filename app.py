@@ -278,7 +278,7 @@ class ContentRater:
             self.feedback.append("Adjust subheading frequency (1 per 250-300 words).")
         else:
             scores['subheading_density'] = 30
-            self client_feedback.append("Poor subheading density; aim for 1 per 250-300 words.")
+            self.feedback.append("Poor subheading density; aim for 1 per 250-300 words.")
 
         return scores
 
