@@ -29,7 +29,7 @@ def load_css():
         h1, h2, h3 {
             color: #1a3c6d;
         }
-        .stTextInput, .stTextArea, .stNumberInput, .stFileUploader {
+        .stTextInput, .stTextArea, .stFileUploader {
             border-radius: 5px;
             border: 1px solid #d1d5db;
             padding: 10px;
@@ -102,15 +102,12 @@ class ContentRater:
     """Class to rate blog content for SEO and readability before publishing."""
     
     def __init__(self, title: str, h1: str, headers: List[str], content: str, 
-                 image_count: int, image_alt_texts: List[str], internal_links: List[str], 
-                 main_keyword: str, secondary_keywords: List[str]):
+                 internal_links: List[str], main_keyword: str, secondary_keywords: List[str]):
         """Initialize with content details."""
         self.title = title.strip()
         self.h1 = h1.strip()
         self.headers = [h.strip() for h in headers]
         self.content = content.strip()
-        self.image_count = image_count
-        self.image_alt_texts = [alt.strip() for alt in image_alt_texts]
         self.internal_links = [link.strip() for link in internal_links]
         self.main_keyword = main_keyword.lower().strip()
         self.secondary_keywords = [kw.lower().strip() for kw in secondary_keywords]
@@ -125,7 +122,6 @@ class ContentRater:
             'keyword_usage': 0.0,
             'content_depth': 0.0,
             'heading_structure': 0.0,
-            'image_optimization': 0.0,
             'internal_links': 0.0,
             'eeat_signals': 0.0
         }
@@ -217,14 +213,11 @@ class ContentRater:
         if secondary_keyword_count > 0:
             # Placement
             headers_text = " ".join(self.headers).lower()
-            alt_texts = " ".join(self.image_alt_texts).lower()
             links_text = " ".join(self.internal_links).lower()
             if any(kw in headers_text for kw in self.secondary_keywords):
                 scores['keyword_usage'] += 10
             else:
                 self.feedback.append("Include secondary keywords in H2/H3 subheadings.")
-            if any(kw in alt_texts for kw in self.secondary_keywords):
-                scores['keyword_usage'] += 5
             if any(kw in links_text for kw in self.secondary_keywords):
                 scores['keyword_usage'] += 5
             # Quantity and density
@@ -275,21 +268,6 @@ class ContentRater:
         else:
             scores['heading_structure'] = 30
             self.feedback.append("Missing H2/H3 tags; ensure multiple subheadings.")
-
-        # Image optimization (2025: alt text with keywords, 1-3 images per 1000 words)
-        if self.image_count > 0:
-            images_per_1000 = (self.image_count / (word_count / 1000)) if word_count > 0 else 0
-            if 1 <= images_per_1000 <= 3:
-                scores['image_optimization'] += 50
-            else:
-                scores['image_optimization'] += 20
-                self.feedback.append("Adjust image count (1-3 per 1000 words).")
-            if all(self.main_keyword in alt.lower() for alt in self.image_alt_texts if alt):
-                scores['image_optimization'] += 50
-            else:
-                self.feedback.append("Ensure all image alt texts include main keyword.")
-        else:
-            self.feedback.append("No images provided; include 1-3 per 1000 words.")
 
         # Internal links (2025: 2-5 links per 1000 words)
         links_per_1000 = (len(self.internal_links) / (word_count / 1000)) if word_count > 0 else 0
@@ -403,13 +381,12 @@ class ContentRater:
         report.append("\n**Improvement Tips:**")
         report.append("- Ensure title and H1 include main keyword and are <60 chars for H1, <70 for title.")
         report.append("- Include primary keyword in H1, first 100 words, conclusion, URL slug, and meta description.")
-        report.append("- Use 2-3 secondary keywords per 1500 words in subheadings, alt texts, and links.")
+        report.append("- Use 2-3 secondary keywords per 1500 words in subheadings and links.")
         report.append("- Keep primary keyword density ≤1.5%, secondary ≤50% of primary usage.")
         report.append("- Use conversational or long-tail keywords for voice search.")
         report.append("- Ensure secondary keywords are semantically relevant to primary keyword.")
         report.append("- Write 1500+ words for in-depth content.")
         report.append("- Use multiple H2/H3 for structure (1 per 250-300 words).")
-        report.append("- Include 1-3 images per 1000 words with keyword-rich alt text.")
         report.append("- Add 2-5 internal links per 1000 words.")
         report.append("- Mention author or sources for E-E-A-T.")
         report.append("- Target Flesch score of 60-70 for readability.")
@@ -442,8 +419,6 @@ def main():
     with st.form("content_form"):
         html_input = st.text_area("Paste HTML Content", placeholder="<html>\n<head>\n<title>Best Running Shoes for 2025</title>\n</head>\n<body>\n<h1>Top Running Shoes Reviewed</h1>\n<h2>Why Choose Quality Shoes?</h2>\n<p>Running shoes are essential for performance...</p>\n</body>\n</html>", height=300)
         uploaded_file = st.file_uploader("Or Upload HTML File", type=["html"])
-        image_count = st.number_input("Number of Images", min_value=0, value=0)
-        image_alt_texts = st.text_area("Image Alt Texts (one per line)", placeholder="Running shoes on trail\nBest athletic shoes")
         internal_links = st.text_area("Internal Links (one per line)", placeholder="/shoe-care\n/running-tips")
         main_keyword = st.text_input("Main Keyword", placeholder="best running shoes")
         secondary_keywords = st.text_area("Secondary Keywords (one per line)", placeholder="running footwear\nathletic shoes")
@@ -466,7 +441,6 @@ def main():
                 title, h1, headers, content = parse_html_content(html_content)
                 
                 # Process other inputs
-                image_alt_list = [alt for alt in image_alt_texts.split("\n") if alt.strip()] if image_alt_texts else []
                 internal_links_list = [link for link in internal_links.split("\n") if link.strip()] if internal_links else []
                 secondary_keywords_list = [kw for kw in secondary_keywords.split("\n") if kw.strip()] if secondary_keywords else []
 
@@ -479,8 +453,6 @@ def main():
                         h1=h1,
                         headers=headers,
                         content=content,
-                        image_count=image_count,
-                        image_alt_texts=image_alt_list,
                         internal_links=internal_links_list,
                         main_keyword=main_keyword,
                         secondary_keywords=secondary_keywords_list
