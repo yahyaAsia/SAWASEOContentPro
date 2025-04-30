@@ -106,67 +106,114 @@ class ContentRater:
 
         # H1 tag (2025: single, descriptive, keyword-rich, concise, intent-aligned, natural)
         if self.h1:
-            # Single H1 (assumed, advise in feedback)
-            scores['h1_tag'] += 10
-            # Descriptive and relevant (>3 words)
+            scores['h1_tag'] += 10  # Single H1
             if len(self.h1.split()) > 3:
-                scores['h1_tag'] += 20
+                scores['h1_tag'] += 20  # Descriptive
             else:
                 self.feedback.append("H1 tag too short; make it descriptive (>3 words).")
-            # Primary keyword
             if self.main_keyword in self.h1.lower():
-                scores['h1_tag'] += 30
+                scores['h1_tag'] += 30  # Primary keyword
             else:
                 self.feedback.append("H1 tag missing main keyword.")
-            # Search intent (approximate with intent-related words)
             intent_words = ['how', 'what', 'why', 'best', 'top', 'guide', 'buy', 'review']
             if any(word in self.h1.lower() for word in intent_words):
-                scores['h1_tag'] += 10
+                scores['h1_tag'] += 10  # Search intent
             else:
                 self.feedback.append("H1 tag may not align with search intent; include words like 'how', 'best', or 'guide'.")
-            # Concise length (<=60 chars ideal, <=70 acceptable)
             if len(self.h1) <= 60:
-                scores['h1_tag'] += 20
+                scores['h1_tag'] += 20  # Concise
             elif len(self.h1) <= 70:
                 scores['h1_tag'] += 10
                 self.feedback.append("H1 tag slightly long; aim for <60 chars.")
             else:
                 self.feedback.append("H1 tag too long (>70 chars); keep it concise.")
-            # Natural language (avoid keyword stuffing)
             keyword_count = self.h1.lower().count(self.main_keyword)
             if keyword_count <= 2:
-                scores['h1_tag'] += 10
+                scores['h1_tag'] += 10  # Natural
             else:
                 self.feedback.append("H1 tag may be keyword-stuffed; use keyword once or twice.")
-            # Feedback for other factors
             self.feedback.append("Ensure H1 is unique across pages and placed prominently as the main headline.")
         else:
             self.feedback.append("H1 tag missing; include a descriptive, keyword-rich H1.")
 
-        # Keyword usage (2025: 1-2% main, 0.5-1% secondary)
+        # Keyword usage (2025: primary ≤1.5%, secondary ≤0.5% of primary, strategic placement)
         words = self.content.lower().split()
         word_count = len(words)
         main_keyword_count = sum(1 for word in words if self.main_keyword in word)
         secondary_keyword_count = sum(1 for word in words for kw in self.secondary_keywords if kw in word)
         main_density = (main_keyword_count / word_count) * 100 if word_count > 0 else 0
         secondary_density = (secondary_keyword_count / word_count) * 100 if word_count > 0 else 0
-        if 1 <= main_density <= 2:
-            scores['keyword_usage'] += 60
-        elif 0 < main_density < 1:
-            scores['keyword_usage'] += 30
-            self.feedback.append("Main keyword density too low (<1%).")
-        elif main_density > 2:
-            scores['keyword_usage'] += 20
-            self.feedback.append("Main keyword density too high (>2%), possible stuffing.")
+        secondary_relative_density = (secondary_keyword_count / main_keyword_count) * 100 if main_keyword_count > 0 else float('inf')
+
+        # Primary keyword evaluation
+        if main_keyword_count > 0:
+            # Placement
+            first_100_words = " ".join(words[:100])
+            last_100_words = " ".join(words[-100:]) if len(words) > 100 else " ".join(words)
+            if self.main_keyword in self.h1.lower():
+                scores['keyword_usage'] += 10
+            if self.main_keyword in first_100_words:
+                scores['keyword_usage'] += 10
+            if self.main_keyword in last_100_words:
+                scores['keyword_usage'] += 10
+            # Density
+            if main_density <= 1.5:
+                scores['keyword_usage'] += 20
+            elif 1.5 < main_density <= 2:
+                scores['keyword_usage'] += 10
+                self.feedback.append("Primary keyword density slightly high (1.5-2%); aim for ≤1.5%.")
+            else:
+                scores['keyword_usage'] += 5
+                self.feedback.append("Primary keyword density too high (>2%); possible stuffing.")
+            # Natural integration (conversational/long-tail)
+            if len(self.main_keyword.split()) > 3 or any(w in self.main_keyword for w in ['how', 'what', 'why']):
+                scores['keyword_usage'] += 10
+            else:
+                self.feedback.append("Use conversational or long-tail primary keyword (e.g., 'how to...').")
         else:
-            self.feedback.append("Main keyword not found in content.")
-        if 0.5 <= secondary_density <= 1:
-            scores['keyword_usage'] += 40
-        elif secondary_density > 1:
-            scores['keyword_usage'] += 20
-            self.feedback.append("Secondary keyword density too high (>1%).")
+            self.feedback.append("Primary keyword not found in content.")
+
+        # Secondary keyword evaluation
+        if secondary_keyword_count > 0:
+            # Placement
+            headers_text = " ".join(self.headers).lower()
+            alt_texts = " ".join(self.image_alt_texts).lower()
+            links_text = " ".join(self.internal_links).lower()
+            if any(kw in headers_text for kw in self.secondary_keywords):
+                scores['keyword_usage'] += 10
+            else:
+                self.feedback.append("Include secondary keywords in H2/H3 subheadings.")
+            if any(kw in alt_texts for kw in self.secondary_keywords):
+                scores['keyword_usage'] += 5
+            if any(kw in links_text for kw in self.secondary_keywords):
+                scores['keyword_usage'] += 5
+            # Quantity and density
+            expected_secondary = 2 if word_count < 1500 else 3
+            if len(self.secondary_keywords) >= expected_secondary:
+                scores['keyword_usage'] += 10
+            else:
+                self.feedback.append(f"Use {expected_secondary} secondary keywords per {word_count} words.")
+            if secondary_relative_density <= 50:
+                scores['keyword_usage'] += 5
+            else:
+                self.feedback.append("Secondary keyword usage too high (>50% of primary); aim for ≤50%.")
+            # Semantic relevance
+            primary_words = set(self.main_keyword.split())
+            secondary_relevant = any(any(w in kw.split() for w in primary_words) for kw in self.secondary_keywords)
+            if secondary_relevant:
+                scores['keyword_usage'] += 5
+            else:
+                self.feedback.append("Secondary keywords may not align with primary keyword; ensure semantic relevance.")
         else:
-            self.feedback.append("Secondary keywords underused (<0.5%).")
+            self.feedback.append("Secondary keywords not found in content.")
+
+        # Penalties
+        if main_density > 1.5 or secondary_relative_density > 50:
+            scores['keyword_usage'] = max(0, scores['keyword_usage'] - 10)  # Stuffing penalty
+        if not secondary_relevant and secondary_keyword_count > 0:
+            scores['keyword_usage'] = max(0, scores['keyword_usage'] - 5)  # Irrelevant penalty
+
+        self.feedback.append("Include primary keyword in URL slug and meta description.")
 
         # Content depth (2025: 1500+ words)
         if word_count >= 1500:
@@ -315,9 +362,11 @@ class ContentRater:
             report.append(f"- {feedback}")
         report.append("\n**Improvement Tips:**")
         report.append("- Ensure title and H1 include main keyword and are <60 chars for H1, <70 for title.")
-        report.append("- Make H1 descriptive (>3 words), aligned with search intent, and natural.")
-        report.append("- Use only one H1 per page, unique across pages, and place it prominently.")
-        report.append("- Aim for 1-2% main keyword density, 0.5-1% secondary.")
+        report.append("- Include primary keyword in H1, first 100 words, conclusion, URL slug, and meta description.")
+        report.append("- Use 2-3 secondary keywords per 1500 words in subheadings, alt texts, and links.")
+        report.append("- Keep primary keyword density ≤1.5%, secondary ≤50% of primary usage.")
+        report.append("- Use conversational or long-tail keywords for voice search.")
+        report.append("- Ensure secondary keywords are semantically relevant to primary keyword.")
         report.append("- Write 1500+ words for in-depth content.")
         report.append("- Use multiple H2/H3 for structure (1 per 250-300 words).")
         report.append("- Include 1-3 images per 1000 words with keyword-rich alt text.")
