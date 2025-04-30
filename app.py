@@ -442,15 +442,54 @@ def main():
     with st.form("content_form"):
         html_input = st.text_area("Paste HTML Content", placeholder="<html>\n<head>\n<title>Best Running Shoes for 2025</title>\n</head>\n<body>\n<h1>Top Running Shoes Reviewed</h1>\n<h2>Why Choose Quality Shoes?</h2>\n<p>Running shoes are essential for performance...</p>\n</body>\n</html>", height=300)
         uploaded_file = st.file_uploader("Or Upload HTML File", type=["html"])
-        image_count = st.number presupposes that the HTML content is well-structured with a single `<title>`, a single `<h1>`, and appropriate use of `<h2>`, `<h3>`, and content tags like `<p>`, `<div>`, `<article>`, or `<section>`.
+        image_count = st.number_input("Number of Images", min_value=0, value=0)
+        image_alt_texts = st.text_area("Image Alt Texts (one per line)", placeholder="Running shoes on trail\nBest athletic shoes")
+        internal_links = st.text_area("Internal Links (one per line)", placeholder="/shoe-care\n/running-tips")
+        main_keyword = st.text_input("Main Keyword", placeholder="best running shoes")
+        secondary_keywords = st.text_area("Secondary Keywords (one per line)", placeholder="running footwear\nathletic shoes")
+        submit = st.form_submit_button("Rate Content")
 
-### Updated `requirements.txt`
-To support HTML parsing with `BeautifulSoup`, we need to add `beautifulsoup4` to the dependencies. Below is the updated `requirements.txt`:
+    if submit:
+        if not html_input and not uploaded_file:
+            st.error("Please provide HTML content by pasting it or uploading a file.")
+        if not main_keyword:
+            st.error("Please provide a Main Keyword.")
+        else:
+            try:
+                # Get HTML content from input or uploaded file
+                if uploaded_file:
+                    html_content = uploaded_file.read().decode("utf-8")
+                else:
+                    html_content = html_input
 
-<xaiArtifact artifact_id="2abfb697-9369-400f-a08b-69c604ad60cd" artifact_version_id="3415961c-ea03-48d4-874a-95e91ad2d66d" title="requirements.txt" contentType="text/plain">
-```
-streamlit==1.31.0
-textstat==0.7.4
-nltk==3.8.1
-beautifulsoup4==4.12.3
-```
+                # Parse the HTML content
+                title, h1, headers, content = parse_html_content(html_content)
+                
+                # Process other inputs
+                image_alt_list = [alt for alt in image_alt_texts.split("\n") if alt.strip()] if image_alt_texts else []
+                internal_links_list = [link for link in internal_links.split("\n") if link.strip()] if internal_links else []
+                secondary_keywords_list = [kw for kw in secondary_keywords.split("\n") if kw.strip()] if secondary_keywords else []
+
+                # Check if parsed components are present
+                if not all([title, h1, content]):
+                    st.error("Invalid HTML format. Ensure the content includes a <title>, <h1>, and main content (e.g., <p> tags).")
+                else:
+                    rater = ContentRater(
+                        title=title,
+                        h1=h1,
+                        headers=headers,
+                        content=content,
+                        image_count=image_count,
+                        image_alt_texts=image_alt_list,
+                        internal_links=internal_links_list,
+                        main_keyword=main_keyword,
+                        secondary_keywords=secondary_keywords_list
+                    )
+                    report = rater.generate_report()
+                    st.markdown(f"<div class='report-box'><p class='score'>Final Score: {rater.score:.2f}/100</p>{report}</div>", unsafe_allow_html=True)
+            except Exception as e:
+                st.error(f"Error processing content: {str(e)}")
+                st.markdown("Please ensure all inputs are valid and follow the expected HTML format, then try again.")
+
+if __name__ == "__main__":
+    main()
