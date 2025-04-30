@@ -4,6 +4,7 @@ import nltk
 from nltk.tokenize import sent_tokenize
 import re
 from typing import Dict, List, Tuple
+from bs4 import BeautifulSoup
 import uuid
 
 # Ensure NLTK punkt data is downloaded
@@ -28,7 +29,7 @@ def load_css():
         h1, h2, h3 {
             color: #1a3c6d;
         }
-        .stTextInput, .stTextArea, .stNumberInput {
+        .stTextInput, .stTextArea, .stNumberInput, .stFileUploader {
             border-radius: 5px;
             border: 1px solid #d1d5db;
             padding: 10px;
@@ -61,38 +62,40 @@ def load_css():
         </style>
     """, unsafe_allow_html=True)
 
-def parse_blog_content(full_content: str) -> Tuple[str, str, List[str], str]:
-    """Parse full blog content to extract title, H1, headers, and main content."""
-    lines = full_content.split("\n")
-    title = ""
-    h1 = ""
+def parse_html_content(html_content: str) -> Tuple[str, str, List[str], str]:
+    """Parse HTML content to extract title, H1, headers (H2/H3), and main content."""
+    soup = BeautifulSoup(html_content, 'html.parser')
+
+    # Extract title
+    title_tag = soup.find('title')
+    title = title_tag.get_text().strip() if title_tag else ""
+
+    # Extract H1
+    h1_tag = soup.find('h1')
+    h1 = h1_tag.get_text().strip() if h1_tag else ""
+
+    # Extract headers (H2, H3)
     headers = []
-    content_lines = []
-    in_content = False
+    for tag in soup.find_all(['h2', 'h3']):
+        header_text = tag.get_text().strip()
+        if header_text:
+            headers.append(header_text)
 
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        # Title: First line starting with #
-        if not title and line.startswith("# ") and not in_content:
-            title = line[2:].strip()
-            continue
-        # H1: First line starting with ##
-        if not h1 and line.startswith("## ") and not in_content:
-            h1 = line[3:].strip()
-            continue
-        # Headers: Lines starting with ###
-        if line.startswith("### ") and not in_content:
-            headers.append(line[4:].strip())
-            continue
-        # Everything else is content
-        in_content = True
-        content_lines.append(line)
-
-    # Join content lines, removing any leading/trailing whitespace
-    content = "\n".join(content_lines).strip()
+    # Extract main content (text from p, div, article, etc.)
+    content_tags = soup.find_all(['p', 'div', 'article', 'section'])
+    content_parts = []
+    for tag in content_tags:
+        # Exclude tags that are headers or contain headers
+        if not tag.find_all(['h1', 'h2', 'h3']):
+            text = tag.get_text(separator=" ").strip()
+            if text:
+                content_parts.append(text)
     
+    # Join content parts and clean up
+    content = " ".join(content_parts).strip()
+    # Remove extra whitespace
+    content = re.sub(r'\s+', ' ', content)
+
     return title, h1, headers, content
 
 class ContentRater:
@@ -418,59 +421,36 @@ def main():
     """Streamlit app for content rating."""
     load_css()
     st.title("Pre-Publishing Content Rating Tool")
-    st.markdown("Paste your full blog content below (including title, H1, and headers) and provide additional details to get an SEO and readability score.")
+    st.markdown("Paste your HTML blog content below or upload an HTML file, and provide additional details to get an SEO and readability score.")
     st.markdown("""
-        **Expected Blog Format:**
-        ```
-        # Blog Title
-        ## H1 Tag
-        ### H2 or H3 Header
-        Main content paragraphs...
+        **Expected HTML Format:**
+        ```html
+        <html>
+            <head>
+                <title>Blog Title</title>
+            </head>
+            <body>
+                <h1>H1 Tag</h1>
+                <h2>H2 Header</h2>
+                <h3>H3 Header</h3>
+                <p>Main content paragraphs...</p>
+            </body>
+        </html>
         ```
     """)
 
     with st.form("content_form"):
-        full_content = st.text_area("Full Blog Content", placeholder="# Best Running Shoes for 2025\n## Top Running Shoes Reviewed\n### Why Choose Quality Shoes?\nRunning shoes are essential for performance...", height=300)
-        image_count = st.number_input("Number of Images", min_value=0, value=0)
-        image_alt_texts = st.text_area("Image Alt Texts (one per line)", placeholder="Running shoes on trail\nBest athletic shoes")
-        internal_links = st.text_area("Internal Links (one per line)", placeholder="/shoe-care\n/running-tips")
-        main_keyword = st.text_input("Main Keyword", placeholder="best running shoes")
-        secondary_keywords = st.text_area("Secondary Keywords (one per line)", placeholder="running footwear\nathletic shoes")
-        submit = st.form_submit_button("Rate Content")
+        html_input = st.text_area("Paste HTML Content", placeholder="<html>\n<head>\n<title>Best Running Shoes for 2025</title>\n</head>\n<body>\n<h1>Top Running Shoes Reviewed</h1>\n<h2>Why Choose Quality Shoes?</h2>\n<p>Running shoes are essential for performance...</p>\n</body>\n</html>", height=300)
+        uploaded_file = st.file_uploader("Or Upload HTML File", type=["html"])
+        image_count = st.number presupposes that the HTML content is well-structured with a single `<title>`, a single `<h1>`, and appropriate use of `<h2>`, `<h3>`, and content tags like `<p>`, `<div>`, `<article>`, or `<section>`.
 
-    if submit:
-        if not full_content or not main_keyword:
-            st.error("Please fill in all required fields (Full Blog Content, Main Keyword).")
-        else:
-            try:
-                # Parse the full blog content
-                title, h1, headers, content = parse_blog_content(full_content)
-                
-                # Process other inputs
-                image_alt_list = [alt for alt in image_alt_texts.split("\n") if alt.strip()] if image_alt_texts else []
-                internal_links_list = [link for link in internal_links.split("\n") if link.strip()] if internal_links else []
-                secondary_keywords_list = [kw for kw in secondary_keywords.split("\n") if kw.strip()] if secondary_keywords else []
+### Updated `requirements.txt`
+To support HTML parsing with `BeautifulSoup`, we need to add `beautifulsoup4` to the dependencies. Below is the updated `requirements.txt`:
 
-                # Check if parsed components are present
-                if not all([title, h1, content]):
-                    st.error("Invalid blog format. Ensure the content includes a title (#), H1 (##), and main content.")
-                else:
-                    rater = ContentRater(
-                        title=title,
-                        h1=h1,
-                        headers=headers,
-                        content=content,
-                        image_count=image_count,
-                        image_alt_texts=image_alt_list,
-                        internal_links=internal_links_list,
-                        main_keyword=main_keyword,
-                        secondary_keywords=secondary_keywords_list
-                    )
-                    report = rater.generate_report()
-                    st.markdown(f"<div class='report-box'><p class='score'>Final Score: {rater.score:.2f}/100</p>{report}</div>", unsafe_allow_html=True)
-            except Exception as e:
-                st.error(f"Error processing content: {str(e)}")
-                st.markdown("Please ensure all inputs are valid and follow the expected format, then try again.")
-
-if __name__ == "__main__":
-    main()
+<xaiArtifact artifact_id="2abfb697-9369-400f-a08b-69c604ad60cd" artifact_version_id="3415961c-ea03-48d4-874a-95e91ad2d66d" title="requirements.txt" contentType="text/plain">
+```
+streamlit==1.31.0
+textstat==0.7.4
+nltk==3.8.1
+beautifulsoup4==4.12.3
+```
