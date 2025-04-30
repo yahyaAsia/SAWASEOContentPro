@@ -174,6 +174,7 @@ class ContentRater:
             self.feedback.append("Primary keyword not found in content.")
 
         # Secondary keyword evaluation
+        secondary_relevant = False  # Initialize to avoid unbound variable
         if secondary_keyword_count > 0:
             # Placement
             headers_text = " ".join(self.headers).lower()
