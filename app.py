@@ -6,12 +6,28 @@ import re
 from typing import Dict, List, Tuple
 from bs4 import BeautifulSoup
 import uuid
+import hashlib
+from collections import Counter
 
 # Ensure NLTK punkt data is downloaded
 try:
     nltk.data.find('tokenizers/punkt')
 except LookupError:
     nltk.download('punkt', quiet=True)
+
+# Synonym dictionary for rephrasing
+SYNONYMS = {
+    'utilize': 'use',
+    'enhance': 'improve',
+    'advanced': 'modern',
+    'performance': 'results',
+    'technical': 'specialized',
+    'evaluate': 'assess',
+    'complex': 'complicated',
+    'optimal': 'best',
+    'demonstrate': 'show',
+    'significant': 'important'
+}
 
 # Custom CSS for professional UI/UX
 def load_css():
@@ -98,6 +114,87 @@ def parse_html_content(html_content: str) -> Tuple[str, str, List[str], str]:
 
     return title, h1, headers, content
 
+def suggest_keywords(main_keyword: str, secondary_keywords: List[str], content: str, headers: List[str]) -> List[str]:
+    """Suggest semantically related keywords based on main keyword and content."""
+    words = content.lower().split() + " ".join(headers).lower().split()
+    word_counts = Counter(words)
+    
+    # Generate suggestions based on main keyword and frequent content words
+    main_words = set(main_keyword.lower().split())
+    suggestions = []
+    for word, count in word_counts.most_common(50):  # Top 50 frequent words
+        if word not in main_keyword.lower() and word not in secondary_keywords and len(word) > 3:
+            if any(w in word or word in w for w in main_words):
+                suggestions.append(word)
+    
+    # Combine with related phrases
+    related_phrases = []
+    for kw in [main_keyword] + secondary_keywords:
+        for word in suggestions[:5]:
+            related_phrases.append(f"{kw} {word}")
+            related_phrases.append(f"{word} {kw}")
+    
+    return list(set(suggestions + related_phrases))[:5]  # Return top 5 unique suggestions
+
+def analyze_tone(content: str) -> Tuple[float, str]:
+    """Analyze tone consistency (academic/technical focus)."""
+    sentences = sent_tokenize(content)
+    academic_words = ['analysis', 'evaluate', 'assess', 'research', 'study', 'technical', 'methodology', 'data', 'results', 'significant']
+    conversational_words = ['great', 'easy', 'awesome', 'cool', 'fun', 'simple', 'nice']
+    
+    academic_count = sum(content.lower().count(word) for word in academic_words)
+    conversational_count = sum(content.lower().count(word) for word in conversational_words)
+    total_sentences = len(sentences)
+    
+    academic_ratio = academic_count / total_sentences if total_sentences > 0 else 0
+    conversational_ratio = conversational_count / total_sentences if total_sentences > 0 else 0
+    
+    if academic_ratio > conversational_ratio and academic_ratio > 0.1:
+        score = 100 if academic_ratio > 0.2 else 70
+        feedback = "" if score == 100 else "Tone mostly academic; increase use of formal terms like 'analysis' or 'evaluate'."
+    elif conversational_ratio > academic_ratio and conversational_ratio > 0.1:
+        score = 30
+        feedback = "Tone too conversational; use formal terms like 'research' or 'technical' for academic style."
+    else:
+        score = 50
+        feedback = "Inconsistent tone; maintain academic style with formal terms."
+    
+    return score, feedback
+
+def check_plagiarism(content: str) -> Tuple[float, str]:
+    """Basic plagiarism check using phrase repetition."""
+    sentences = sent_tokenize(content)
+    phrase_length = 5  # Check 5-word phrases
+    phrases = []
+    for sent in sentences:
+        words = sent.split()
+        for i in range(len(words) - phrase_length + 1):
+            phrase = " ".join(words[i:i+phrase_length])
+            phrases.append(phrase)
+    
+    phrase_counts = Counter(phrases)
+    repeated_phrases = sum(count - 1 for count in phrase_counts.values() if count > 1)
+    total_phrases = len(phrases)
+    repetition_ratio = repeated_phrases / total_phrases if total_phrases > 0 else 0
+    
+    if repetition_ratio > 0.1:
+        score = 50
+        feedback = "Content contains repeated phrases; ensure originality to avoid duplication."
+    else:
+        score = 100
+        feedback = ""
+    
+    return score, feedback
+
+def rephrase_sentence(sentence: str) -> str:
+    """Rephrase a sentence using synonym replacement."""
+    words = sentence.split()
+    new_words = []
+    for word in words:
+        new_word = SYNONYMS.get(word.lower(), word)
+        new_words.append(new_word if word.islower() else new_word.capitalize())
+    return " ".join(new_words)
+
 class ContentRater:
     """Class to rate blog content for SEO and readability before publishing."""
     
@@ -113,6 +210,7 @@ class ContentRater:
         self.secondary_keywords = [kw.lower().strip() for kw in secondary_keywords]
         self.score = 0
         self.feedback = []
+        self.keyword_suggestions = []
 
     def evaluate_seo(self) -> Dict[str, float]:
         """Evaluate SEO factors and return scores."""
@@ -251,11 +349,11 @@ class ContentRater:
         else:
             self.feedback.append("Secondary keywords not found in content.")
 
-        # Penalties (reduced to be less harsh)
+        # Penalties
         if main_density > 3.0 or secondary_relative_density > 100:
-            scores['keyword_usage'] = max(0, scores['keyword_usage'] - 5)  # Reduced stuffing penalty
+            scores['keyword_usage'] = max(0, scores['keyword_usage'] - 5)
         if secondary_keyword_count > 0 and not secondary_relevant:
-            scores['keyword_usage'] = max(0, scores['keyword_usage'] - 3)  # Reduced irrelevance penalty
+            scores['keyword_usage'] = max(0, scores['keyword_usage'] - 3)
 
         self.feedback.append("Include primary keyword in URL slug and meta description.")
 
@@ -298,7 +396,9 @@ class ContentRater:
         scores = {
             'flesch_score': 0.0,
             'sentence_length': 0.0,
-            'subheading_density': 0.0
+            'subheading_density': 0.0,
+            'tone_consistency': 0.0,
+            'plagiarism_check': 0.0
         }
 
         # Flesch-Kincaid score (2025: 30-50 for academic/technical audience)
@@ -338,6 +438,13 @@ class ContentRater:
                 else:
                     scores['sentence_length'] = 30
                     self.feedback.append("Excessive long sentences; simplify for readability.")
+                
+                # Rephrase long or complex sentences
+                for sent in sentences:
+                    if len(sent.split()) > 25 or textstat.flesch_reading_ease(sent) < 30:
+                        rephrased = rephrase_sentence(sent)
+                        if rephrased != sent:
+                            self.feedback.append(f"Complex sentence: '{sent}' Rephrased: '{rephrased}'")
         except LookupError:
             scores['sentence_length'] = 0
             self.feedback.append("Sentence tokenization failed; ensure NLTK 'punkt' is installed.")
@@ -365,7 +472,7 @@ class ContentRater:
             if keyword_mapping_score < 30:
                 self.feedback.append("Assign 1-2 secondary keywords to each H2/H3 for topical depth.")
 
-            # Semantic analysis (simple: check if headers share words with main keyword)
+            # Semantic analysis
             primary_words = set(self.main_keyword.split())
             semantic_score = 20
             for header in self.headers:
@@ -375,7 +482,7 @@ class ContentRater:
                     self.feedback.append(f"Header '{header}' may lack topical relevance; include main keyword terms.")
                     break
 
-            # Readability audit (inspired by Yoast/Hemingway)
+            # Readability audit
             readability_score = 20
             for header in self.headers:
                 header_words = len(header.split())
@@ -398,7 +505,19 @@ class ContentRater:
             else:
                 self.feedback.append("Poor subheading density; aim for 1 per 200-400 words.")
 
-            scores['subheading_density'] = keyword_mapping_score + semantic_score + readability_score + density_score
+            scores['subheading_density'] = min(100, keyword_mapping_score + semantic_score + readability_score + density_score)
+
+        # Tone consistency
+        tone_score, tone_feedback = analyze_tone(self.content)
+        scores['tone_consistency'] = tone_score
+        if tone_feedback:
+            self.feedback.append(tone_feedback)
+
+        # Plagiarism check
+        plagiarism_score, plagiarism_feedback = check_plagiarism(self.content)
+        scores['plagiarism_check'] = plagiarism_score
+        if plagiarism_feedback:
+            self.feedback.append(plagiarism_feedback)
 
         return scores
 
@@ -413,6 +532,7 @@ class ContentRater:
 
     def generate_report(self) -> str:
         """Generate detailed report with scores and feedback."""
+        self.keyword_suggestions = suggest_keywords(self.main_keyword, self.secondary_keywords, self.content, self.headers)
         seo_scores = self.evaluate_seo()
         readability_scores = self.evaluate_readability()
         final_score = self.calculate_final_score(seo_scores, readability_scores)
@@ -437,6 +557,7 @@ class ContentRater:
         report.append("- Ensure title and H1 include main keyword and are <60 chars for H1, <70 for title.")
         report.append("- Include primary keyword in H1, first 100 words, conclusion, URL slug, and meta description.")
         report.append("- Use 2-3 secondary keywords per 1500 words in subheadings and links.")
+        report.append(f"- Suggested keywords: {', '.join(self.keyword_suggestions)}")
         report.append("- Keep primary keyword density ≤2%, secondary balanced with primary usage.")
         report.append("- Use conversational or long-tail keywords for voice search.")
         report.append("- Ensure secondary keywords are semantically relevant to primary keyword.")
@@ -447,6 +568,8 @@ class ContentRater:
         report.append("- Add 2-5 internal links per 1000 words.")
         report.append("- Target Flesch score of 30-50 for academic/technical readability.")
         report.append("- Keep sentences under 25 words for clarity.")
+        report.append("- Maintain academic tone with formal terms like 'analysis' or 'evaluate'.")
+        report.append("- Ensure content originality to avoid plagiarism.")
 
         return "\n".join(report)
 
@@ -473,10 +596,10 @@ def main():
     """)
 
     with st.form("content_form"):
-        html_input = st.text_area("Paste HTML Content", placeholder="<html>\n<head>\n<title>Best Running Shoes for 2025</title>\n</head>\n<body>\n<h1>Top Running Shoes Reviewed</h1>\n<h2>Why Choose Quality Shoes?</h2>\n<p>Running shoes are essential for performance...</p>\n</body>\n</html>", height=300)
+        html_input = st.text_area("Paste HTML Content", placeholder="<html>\n<head>\n<title>Advanced Running Shoe Technology for 2025</title>\n</head>\n<body>\n<h1>Running Shoe Innovations Analyzed</h1>\n<h2>Running Footwear Materials</h2>\n<p>Advanced running footwear uses carbon fiber...</p>\n</body>\n</html>", height=300)
         uploaded_file = st.file_uploader("Or Upload HTML File", type=["html"])
-        internal_links = st.text_area("Internal Links (one per line)", placeholder="/shoe-care\n/running-tips")
-        main_keyword = st.text_input("Main Keyword", placeholder="best running shoes")
+        internal_links = st.text_area("Internal Links (one per line)", placeholder="/shoe-design\n/performance-tips")
+        main_keyword = st.text_input("Main Keyword", placeholder="running shoe technology")
         secondary_keywords = st.text_input("Secondary Keywords (comma-separated)", placeholder="running footwear, athletic shoes")
         submit = st.form_submit_button("Rate Content")
 
