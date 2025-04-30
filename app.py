@@ -145,6 +145,9 @@ class ContentRater:
         secondary_density = (secondary_keyword_count / word_count) * 100 if word_count > 0 else 0
         secondary_relative_density = (secondary_keyword_count / main_keyword_count) * 100 if main_keyword_count > 0 else float('inf')
 
+        # Initialize secondary_relevant
+        secondary_relevant = False
+
         # Primary keyword evaluation
         if main_keyword_count > 0:
             # Placement
@@ -174,7 +177,6 @@ class ContentRater:
             self.feedback.append("Primary keyword not found in content.")
 
         # Secondary keyword evaluation
-        secondary_relevant = False  # Initialize to avoid unbound variable
         if secondary_keyword_count > 0:
             # Placement
             headers_text = " ".join(self.headers).lower()
@@ -211,7 +213,7 @@ class ContentRater:
         # Penalties
         if main_density > 1.5 or secondary_relative_density > 50:
             scores['keyword_usage'] = max(0, scores['keyword_usage'] - 10)  # Stuffing penalty
-        if not secondary_relevant and secondary_keyword_count > 0:
+        if secondary_keyword_count > 0 and not secondary_relevant:
             scores['keyword_usage'] = max(0, scores['keyword_usage'] - 5)  # Irrelevant penalty
 
         self.feedback.append("Include primary keyword in URL slug and meta description.")
