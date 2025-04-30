@@ -6,6 +6,12 @@ import re
 from typing import Dict, List, Tuple
 import uuid
 
+# Ensure NLTK punkt data is downloaded
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt', quiet=True)
+
 # Custom CSS for professional UI/UX
 def load_css():
     st.markdown("""
@@ -161,7 +167,7 @@ class ContentRater:
             else:
                 scores['image_optimization'] += 20
                 self.feedback.append("Adjust image count (1-3 per 1000 words).")
-            if all(self.main_keyword in alt.lower() for alt in self.image_alt_texts):
+            if all(self.main_keyword in alt.lower() for alt in self.image_alt_texts if alt):
                 scores['image_optimization'] += 50
             else:
                 self.feedback.append("Ensure all image alt texts include main keyword.")
@@ -197,28 +203,39 @@ class ContentRater:
         }
 
         # Flesch-Kincaid score (2025: 60-70 for general audience)
-        flesch_score = textstat.flesch_reading_ease(self.content)
-        if 60 <= flesch_score <= 70:
-            scores['flesch_score'] = 100
-        elif 50 <= flesch_score < 60 or 70 < flesch_score <= 80:
-            scores['flesch_score'] = 70
-            self.feedback.append("Flesch score slightly off (aim for 60-70).")
-        else:
-            scores['flesch_score'] = 30
-            self.feedback.append("Flesch score too low/high; adjust for general audience.")
+        try:
+            flesch_score = textstat.flesch_reading_ease(self.content)
+            if 60 <= flesch_score <= 70:
+                scores['flesch_score'] = 100
+            elif 50 <= flesch_score < 60 or 70 < flesch_score <= 80:
+                scores['flesch_score'] = 70
+                self.feedback.append("Flesch score slightly off (aim for 60-70).")
+            else:
+                scores['flesch_score'] = 30
+                self.feedback.append("Flesch score too low/high; adjust for general audience.")
+        except Exception as e:
+            scores['flesch_score'] = 0
+            self.feedback.append(f"Error calculating Flesch score: {str(e)}")
 
         # Sentence length (2025: <25% sentences >20 words)
-        sentences = sent_tokenize(self.content)
-        long_sentences = sum(1 for sent in sentences if len(sent.split()) > 20)
-        long_sentence_ratio = (long_sentences / len(sentences)) * 100 if sentences else 100
-        if long_sentence_ratio <= 25:
-            scores['sentence_length'] = 100
-        elif long_sentence_ratio <= 40:
-            scores['sentence_length'] = 70
-            self.feedback.append("Too many long sentences; keep most under 20 words.")
-        else:
-            scores['sentence_length'] = 30
-            self.feedback.append("Excessive long sentences; simplify for readability.")
+        try:
+            sentences = sent_tokenize(self.content)
+            long_sentences = sum(1 for sent in sentences if len(sent.split()) > 20)
+            long_sentence_ratio = (long_sentences / len(sentences)) * 100 if sentences else 100
+            if long_sentence_ratio <= 25:
+                scores['sentence_length'] = 100
+            elif long_sentence_ratio <= 40:
+                scores['sentence_length'] = 70
+                self.feedback.append("Too many long sentences; keep most under 20 words.")
+            else:
+                scores['sentence_length'] = 30
+                self.feedback.append("Excessive long sentences; simplify for readability.")
+        except LookupError:
+            scores['sentence_length'] = 0
+            self.feedback.append("Sentence tokenization failed; ensure NLTK 'punkt' is installed.")
+        except Exception as e:
+            scores['sentence_length'] = 0
+            self.feedback.append(f"Error analyzing sentence length: {str(e)}")
 
         # Subheading density (2025: 1 subheading per 250-300 words)
         word_count = len(self.content.split())
@@ -301,24 +318,28 @@ def main():
         if not all([title, h1, content, main_keyword]):
             st.error("Please fill in all required fields (Title, H1, Content, Main Keyword).")
         else:
-            headers_list = headers.split("\n") if headers else []
-            image_alt_list = image_alt_texts.split("\n") if image_alt_texts else []
-            internal_links_list = internal_links.split("\n") if internal_links else []
-            secondary_keywords_list = secondary_keywords.split("\n") if secondary_keywords else []
+            headers_list = [h for h in headers.split("\n") if h.strip()] if headers else []
+            image_alt_list = [alt for alt in image_alt_texts.split("\n") if alt.strip()] if image_alt_texts else []
+            internal_links_list = [link for link in internal_links.split("\n") if link.strip()] if internal_links else []
+            secondary_keywords_list = [kw for kw in secondary_keywords.split("\n") if kw.strip()] if secondary_keywords else []
 
-            rater = ContentRater(
-                title=title,
-                h1=h1,
-                headers=headers_list,
-                content=content,
-                image_count=image_count,
-                image_alt_texts=image_alt_list,
-                internal_links=internal_links_list,
-                main_keyword=main_keyword,
-                secondary_keywords=secondary_keywords_list
-            )
-            report = rater.generate_report()
-            st.markdown(f"<div class='report-box'><p class='score'>Final Score: {rater.score:.2f}/100</p>{report}</div>", unsafe_allow_html=True)
+            try:
+                rater = ContentRater(
+                    title=title,
+                    h1=h1,
+                    headers=headers_list,
+                    content=content,
+                    image_count=image_count,
+                    image_alt_texts=image_alt_list,
+                    internal_links=internal_links_list,
+                    main_keyword=main_keyword,
+                    secondary_keywords=secondary_keywords_list
+                )
+                report = rater.generate_report()
+                st.markdown(f"<div class='report-box'><p class='score'>Final Score: {rater.score:.2f}/100</p>{report}</div>", unsafe_allow_html=True)
+            except Exception as e:
+                st.error(f"Error processing content: {str(e)}")
+                st.markdown("Please ensure all inputs are valid and try again.")
 
 if __name__ == "__main__":
     main()
