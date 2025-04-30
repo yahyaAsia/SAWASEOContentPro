@@ -169,43 +169,52 @@ class ContentRater:
         else:
             self.feedback.append("H1 tag missing; include a descriptive, keyword-rich H1.")
 
-        # Keyword usage (2025: primary ≤1.5%, secondary ≤0.5% of primary, strategic placement)
-        words = self.content.lower().split()
+        # Keyword usage (2025: primary ≤2%, secondary presence, strategic placement)
+        content_lower = self.content.lower()
+        words = content_lower.split()
         word_count = len(words)
-        main_keyword_count = sum(1 for word in words if self.main_keyword in word)
-        secondary_keyword_count = sum(1 for word in words for kw in self.secondary_keywords if kw in word)
+
+        # Count main keyword occurrences using regex for exact matches
+        main_keyword_pattern = r'\b' + re.escape(self.main_keyword) + r'\b'
+        main_keyword_count = len(re.findall(main_keyword_pattern, content_lower, re.IGNORECASE))
         main_density = (main_keyword_count / word_count) * 100 if word_count > 0 else 0
+
+        # Count secondary keyword occurrences
+        secondary_keyword_count = 0
+        for kw in self.secondary_keywords:
+            kw_pattern = r'\b' + re.escape(kw) + r'\b'
+            secondary_keyword_count += len(re.findall(kw_pattern, content_lower, re.IGNORECASE))
         secondary_density = (secondary_keyword_count / word_count) * 100 if word_count > 0 else 0
         secondary_relative_density = (secondary_keyword_count / main_keyword_count) * 100 if main_keyword_count > 0 else float('inf')
-
-        # Initialize secondary_relevant
-        secondary_relevant = False
 
         # Primary keyword evaluation
         if main_keyword_count > 0:
             # Placement
-            first_100_words = " ".join(words[:100])
-            last_100_words = " ".join(words[-100:]) if len(words) > 100 else " ".join(words)
-            if self.main_keyword in self.h1.lower():
-                scores['keyword_usage'] += 10
-            if self.main_keyword in first_100_words:
-                scores['keyword_usage'] += 10
-            if self.main_keyword in last_100_words:
+            first_100_words = " ".join(words[:100]).lower()
+            last_100_words = " ".join(words[-100:]).lower() if len(words) > 100 else content_lower
+            headers_text = " ".join(self.headers).lower()
+            if re.search(main_keyword_pattern, self.h1.lower(), re.IGNORECASE):
+                scores['keyword_usage'] += 15
+            if re.search(main_keyword_pattern, first_100_words, re.IGNORECASE):
+                scores['keyword_usage'] += 15
+            if re.search(main_keyword_pattern, last_100_words, re.IGNORECASE):
+                scores['keyword_usage'] += 15
+            if re.search(main_keyword_pattern, headers_text, re.IGNORECASE):
                 scores['keyword_usage'] += 10
             # Density
-            if main_density <= 1.5:
+            if main_density <= 2.0:
                 scores['keyword_usage'] += 20
-            elif 1.5 < main_density <= 2:
+            elif main_density <= 3.0:
                 scores['keyword_usage'] += 10
-                self.feedback.append("Primary keyword density slightly high (1.5-2%); aim for ≤1.5%.")
+                self.feedback.append("Primary keyword density slightly high (2-3%); aim for ≤2%.")
             else:
                 scores['keyword_usage'] += 5
-                self.feedback.append("Primary keyword density too high (>2%); possible stuffing.")
+                self.feedback.append("Primary keyword density too high (>3%); possible stuffing.")
             # Natural integration (conversational/long-tail)
-            if len(self.main_keyword.split()) > 3 or any(w in self.main_keyword for w in ['how', 'what', 'why']):
+            if len(self.main_keyword.split()) > 2 or any(w in self.main_keyword for w in ['how', 'what', 'why']):
                 scores['keyword_usage'] += 10
             else:
-                self.feedback.append("Use conversational or long-tail primary keyword (e.g., 'how to...').")
+                self.feedback.append("Consider using a conversational or long-tail primary keyword (e.g., 'how to...').")
         else:
             self.feedback.append("Primary keyword not found in content.")
 
@@ -214,22 +223,25 @@ class ContentRater:
             # Placement
             headers_text = " ".join(self.headers).lower()
             links_text = " ".join(self.internal_links).lower()
-            if any(kw in headers_text for kw in self.secondary_keywords):
+            secondary_in_headers = any(re.search(r'\b' + re.escape(kw) + r'\b', headers_text, re.IGNORECASE) for kw in self.secondary_keywords)
+            secondary_in_links = any(re.search(r'\b' + re.escape(kw) + r'\b', links_text, re.IGNORECASE) for kw in self.secondary_keywords)
+            if secondary_in_headers:
                 scores['keyword_usage'] += 10
             else:
                 self.feedback.append("Include secondary keywords in H2/H3 subheadings.")
-            if any(kw in links_text for kw in self.secondary_keywords):
+            if secondary_in_links:
                 scores['keyword_usage'] += 5
-            # Quantity and density
+            # Quantity
             expected_secondary = 2 if word_count < 1500 else 3
             if len(self.secondary_keywords) >= expected_secondary:
                 scores['keyword_usage'] += 10
             else:
-                self.feedback.append(f"Use {expected_secondary} secondary keywords per {word_count} words.")
-            if secondary_relative_density <= 50:
+                self.feedback.append(f"Use at least {expected_secondary} secondary keywords for {word_count} words.")
+            # Density
+            if secondary_relative_density <= 100:
                 scores['keyword_usage'] += 5
             else:
-                self.feedback.append("Secondary keyword usage too high (>50% of primary); aim for ≤50%.")
+                self.feedback.append("Secondary keyword usage too high (>100% of primary); aim for balanced use.")
             # Semantic relevance
             primary_words = set(self.main_keyword.split())
             secondary_relevant = any(any(w in kw.split() for w in primary_words) for kw in self.secondary_keywords)
@@ -240,11 +252,11 @@ class ContentRater:
         else:
             self.feedback.append("Secondary keywords not found in content.")
 
-        # Penalties
-        if main_density > 1.5 or secondary_relative_density > 50:
-            scores['keyword_usage'] = max(0, scores['keyword_usage'] - 10)  # Stuffing penalty
+        # Penalties (reduced to be less harsh)
+        if main_density > 3.0 or secondary_relative_density > 100:
+            scores['keyword_usage'] = max(0, scores['keyword_usage'] - 5)  # Reduced stuffing penalty
         if secondary_keyword_count > 0 and not secondary_relevant:
-            scores['keyword_usage'] = max(0, scores['keyword_usage'] - 5)  # Irrelevant penalty
+            scores['keyword_usage'] = max(0, scores['keyword_usage'] - 3)  # Reduced irrelevance penalty
 
         self.feedback.append("Include primary keyword in URL slug and meta description.")
 
@@ -382,7 +394,7 @@ class ContentRater:
         report.append("- Ensure title and H1 include main keyword and are <60 chars for H1, <70 for title.")
         report.append("- Include primary keyword in H1, first 100 words, conclusion, URL slug, and meta description.")
         report.append("- Use 2-3 secondary keywords per 1500 words in subheadings and links.")
-        report.append("- Keep primary keyword density ≤1.5%, secondary ≤50% of primary usage.")
+        report.append("- Keep primary keyword density ≤2%, secondary balanced with primary usage.")
         report.append("- Use conversational or long-tail keywords for voice search.")
         report.append("- Ensure secondary keywords are semantically relevant to primary keyword.")
         report.append("- Write 1500+ words for in-depth content.")
@@ -421,7 +433,7 @@ def main():
         uploaded_file = st.file_uploader("Or Upload HTML File", type=["html"])
         internal_links = st.text_area("Internal Links (one per line)", placeholder="/shoe-care\n/running-tips")
         main_keyword = st.text_input("Main Keyword", placeholder="best running shoes")
-        secondary_keywords = st.text_area("Secondary Keywords (one per line)", placeholder="running footwear\nathletic shoes")
+        secondary_keywords = st.text_input("Secondary Keywords (comma-separated)", placeholder="running footwear, athletic shoes")
         submit = st.form_submit_button("Rate Content")
 
     if submit:
@@ -441,8 +453,8 @@ def main():
                 title, h1, headers, content = parse_html_content(html_content)
                 
                 # Process other inputs
-                internal_links_list = [link for link in internal_links.split("\n") if link.strip()] if internal_links else []
-                secondary_keywords_list = [kw for kw in secondary_keywords.split("\n") if kw.strip()] if secondary_keywords else []
+                internal_links_list = [link.strip() for link in internal_links.split("\n") if link.strip()] if internal_links else []
+                secondary_keywords_list = [kw.strip() for kw in secondary_keywords.split(",") if kw.strip()] if secondary_keywords else []
 
                 # Check if parsed components are present
                 if not all([title, h1, content]):
